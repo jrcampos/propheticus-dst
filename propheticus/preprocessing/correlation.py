@@ -1,6 +1,8 @@
 import numpy
+import sklearn.feature_selection
 from sklearn.base import BaseEstimator, TransformerMixin
 
+import propheticus.shared
 
 class Correlation(BaseEstimator, TransformerMixin):
     def __init__(self, threshold=0.9):
@@ -19,8 +21,12 @@ class Correlation(BaseEstimator, TransformerMixin):
 
         self.indexes_ = []
 
-        # TODO: this should validate that the existing dataset does not contain features with 0 variance, otherwise will throw error
-        # is_tnan = numpy.transpose(X)
+        oVT = sklearn.feature_selection.VarianceThreshold()
+        oVT.fit(X)
+        NullIndexes = numpy.where(oVT.variances_ == 0)[0]
+        if len(NullIndexes) > 0:
+           propheticus.shared.Utils.printFatalMessage(f'Data contained variables with null variance ({NullIndexes}), which is not possible to calculate the correlation matrix. Combine with variance feature selection')
+
         corr = numpy.corrcoef(numpy.transpose(X))
         for i in range(len(corr) - 1):
             if len(numpy.argwhere(corr[i][i + 1:] > self.threshold)) > 0:

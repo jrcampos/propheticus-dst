@@ -10,6 +10,8 @@ import random
 import sys
 import gc
 import json
+
+import pandas
 import sklearn.preprocessing
 import operator
 
@@ -37,9 +39,8 @@ class DataManagement(object):
     Parameters
     ----------
     """
-    def __init__(self, mode):
-        self.mode = mode
-
+    def __init__(self, Context=None):
+        self.Context = Context
         self.Datasets = None
         self.datasets_headers = None
         self.datasets_headers_details = None
@@ -105,9 +106,10 @@ class DataManagement(object):
         self.datasets_headers_details = DataTypes
 
         return True
-    
+
     def exportData(
             self,
+            mode,
             Datasets,
             config_sliding_window,
             config_sequential_data,
@@ -119,8 +121,10 @@ class DataManagement(object):
             pre_target,
             pre_filter_feature_values,
             datasets_exclude_classes,
-            datasets_exclude_run_classes
+            datasets_exclude_run_classes,
+            datasets_classes_remap
         ):
+        self.mode = mode
 
         if Datasets != self.Datasets:
             validated = self.validateChosenDatasets(Datasets)
@@ -142,7 +146,6 @@ class DataManagement(object):
         self.datasets_exclude_classes = datasets_exclude_classes
         self.datasets_exclude_run_classes = datasets_exclude_run_classes
 
-
         '''
         Count the total number of records from the chosen datasets
         '''
@@ -151,6 +154,9 @@ class DataManagement(object):
             file_path = os.path.join(Config.framework_instance_data_path, dataset + '.info.txt')
             with open(file_path, encoding='utf-8') as f:
                 content = f.readlines()
+
+            if len(content) == 0:
+                propheticus.shared.Utils.printFatalMessage(f'{dataset} has no details in info file!?')
             datasets_records += int(content[0])
 
         ''' NOTE: 
@@ -163,6 +169,8 @@ class DataManagement(object):
         sampling_start_time = time.time()
         propheticus.shared.Utils.printStatusMessage('Preprocessing data files', inline=True)
         pool_count = min(Config.max_thread_count, len(self.Datasets))
+
+        # TODO: this logic/naming is not clear; why undersampling if not required? clean up
         if pool_count > 1 and (self.mode == 'cli' or self.mode == 'batch' and Config.thread_level_ != propheticus.shared.Utils.THREAD_LEVEL_BATCH):
             DatasetsUndersamplingData = propheticus.shared.Utils.pool(pool_count, self._undersampleData, self.Datasets)
         else:
@@ -199,6 +207,8 @@ class DataManagement(object):
 
         GRuns = [key for key in DatasetsCleanRuns.keys() if 'G_' in key]
 
+        propheticus.shared.Utils.printStatusMessage(f'Dataset contains {len(DatasetsFailureRuns.keys())} Failure Runs and {len(DatasetsCleanRuns.keys())} Clean Runs ({len(GRuns)} Gold Runs)')
+
         '''
         Undersample the target data to match the maximum records threshold
         '''
@@ -209,7 +219,7 @@ class DataManagement(object):
 
             propheticus.shared.Utils.printNewLine()
             Classes = {key: value for key, value in Classes.items() if value > 0}
-            distributions = '\n'.join(sorted(['- ' + propheticus.shared.Utils.getClassDescriptionById(key) + ': ' + str(value) for key, value in Classes.items()]))
+            distributions = '\n'.join(sorted(['- ' + str(propheticus.shared.Utils.getClassDescriptionById(key)) + ': ' + str(value) for key, value in Classes.items()]))
             propheticus.shared.Utils.printStatusMessage(f'Undersampling Classes distribution in the chosen datasets: \n{distributions}')
 
             high_majority_target = max(Classes.items(), key=operator.itemgetter(1))[0]
@@ -226,6 +236,9 @@ class DataManagement(object):
                     propheticus.shared.Utils.printFatalMessage('Possible infinite loop?')
 
                 if self.config_sequential_data is True:
+                    if len(DatasetsCleanRuns) == 0:
+                        propheticus.shared.Utils.printFatalMessage('No clean runs remain!')
+
                     remove = random.choice(list(DatasetsCleanRuns.keys()))
                     # TODO: improve, too hardcoded
                     if 'G_' in remove:
@@ -251,7 +264,10 @@ class DataManagement(object):
                     propheticus.shared.Utils.printWarningMessage('It was not possible to further reduce the number of the majority samples: ' + str(current_target_samples))
 
                 if len(DatasetsFailureRuns.keys()) > len(GRuns):
-                    propheticus.shared.Utils.printWarningMessage('There are more failure runs than gold runs in the data selected: ' + str(len(DatasetsCleanRuns.keys())) + ' ' + str(len(GRuns)) + ' ' + str(len(DatasetsFailureRuns.keys())))
+                    propheticus.shared.Utils.printWarningMessage(f'There are more failure runs than gold runs in the data selected: {len(DatasetsCleanRuns.keys())} {len(GRuns)} {len(DatasetsFailureRuns.keys())}')
+
+                if len(DatasetsFailureRuns.keys()) > len(DatasetsCleanRuns):
+                    propheticus.shared.Utils.printWarningMessage(f'There are more failure runs than clean runs in the data selected: {len(DatasetsCleanRuns.keys())} {len(GRuns)} {len(DatasetsFailureRuns.keys())}')
 
             propheticus.shared.Utils.printTimeLogMessage('Sampling the data', sampling_start_time)
 
@@ -296,26 +312,44 @@ class DataManagement(object):
         '''
         pool_count = min(Config.max_thread_count, len(self.Datasets))
         if pool_count > 1 and (self.mode == 'cli' or self.mode == 'batch' and Config.thread_level_ != propheticus.shared.Utils.THREAD_LEVEL_BATCH):
-            DatasetsData = propheticus.shared.Utils.pool(pool_count, self._exportDatasetFile, [(dataset, RemovedIndexes[dataset]) for dataset in self.Datasets])
+            DatasetsData = propheticus.shared.Utils.pool(pool_count, self._exportDatasetFile, [(dataset, RemovedIndexes[dataset], datasets_classes_remap) for dataset in self.Datasets])
         else:
-            DatasetsData = [self._exportDatasetFile(dataset, RemovedIndexes[dataset]) for dataset in self.Datasets]
+            DatasetsData = [self._exportDatasetFile(dataset, RemovedIndexes[dataset], datasets_classes_remap) for dataset in self.Datasets]
 
-        DatasetsData = numpy.array(DatasetsData)
+        DatasetData = []
+        DatasetDescriptions = []
+        DatasetTargets = []
 
-        DatasetData = numpy.concatenate(DatasetsData[:, 0])
-        DatasetDescriptions = numpy.concatenate(DatasetsData[:, 1])
-        DatasetTargets = numpy.concatenate(DatasetsData[:, 2])
+        for _Data in DatasetsData:
+            if _Data is None:
+                continue
+
+            DatasetData.append(_Data[0])
+            DatasetDescriptions.append(_Data[1])
+            DatasetTargets.append(_Data[2])
 
         del DatasetsData
+
+        DatasetData = numpy.concatenate(DatasetData)
+        DatasetDescriptions = numpy.concatenate(DatasetDescriptions)
+        DatasetTargets = numpy.concatenate(DatasetTargets)
 
         SupportByClass = collections.Counter(DatasetTargets)
 
         propheticus.shared.Utils.printNewLine()
         propheticus.shared.Utils.printStatusMessage('Classes distribution: \n' + '\n'.join(sorted(['- ' + key + ': ' + str(value) for key, value in SupportByClass.items()])))
 
+        UniqueTargets = sorted(set(DatasetTargets))
+        ExperimentsByTarget = [f'{unique_target}: ' + ', '.join(sorted(set(DatasetDescriptions[DatasetTargets == unique_target]))) for unique_target in UniqueTargets]
+        propheticus.shared.Utils.printStatusMessage('Experiments by target:\n' + '\n'.join(ExperimentsByTarget))
+
+        if len(Headers) == 0:
+            propheticus.shared.Utils.printFatalMessage('At least one feature must remain in the dataset!')  # TODO: this validation should also be made earlier in the execution/flow
+
         return Headers, set(DatasetTargets), DatasetData, DatasetDescriptions, DatasetTargets
 
-    def _exportDatasetFile(self, dataset, RemovedIndexes):
+    @propheticus.shared.Decorators.custom_hook()
+    def _exportDatasetFile(self, dataset, RemovedIndexes, datasets_classes_remap):
         """
         NOTE: Due to the fact that indexes start in 0, in order to calculate the position of the target index on the merged
         array for sliding window, accounting that it will be appended to the end of the merges, the easiest way it is by adding 1 to
@@ -346,10 +380,14 @@ class DataManagement(object):
         -------
 
         """
+
+        start = time.time()
         propheticus.shared.Utils.printInlineStatusMessage('.')
         a = Config.framework_instance_data_path
         file_path = os.path.join(Config.framework_instance_data_path, dataset + '.data.txt')
         with open(file_path, encoding='utf-8') as f:
+            # NOTE: consider using f.read().splitlines() ; this automatically handles differences between new lines across OS ;
+            # NOTE: currently, if on Windows requires that the .split() afterwards does not receive ' ' as argument, otherwise \n will be included
             content = f.readlines()
 
         extra_cols_encoder = 0
@@ -365,6 +403,8 @@ class DataManagement(object):
             propheticus.shared.Utils.printWarningMessage('Categorical features at runtime is time consuming. Consider doing this when generating the dataset')
 
         ItemIndexes = sorted(set(range(len(content))) - set(RemovedIndexes))
+        if len(ItemIndexes) == 0:
+            return None
 
         FeaturesIndexes = {}
         ContentItem = content[ItemIndexes[0]].split()
@@ -441,12 +481,15 @@ class DataManagement(object):
         - Improve validation of the values (types) for the features according to the configurations
         '''
         for index in ItemIndexes:
-            # TODO: review the following if; .splits() can be optimized outside and reused ahead?
+            if len(content[index].split()) != len_item:
+                propheticus.shared.Utils.printFatalMessage(f'Not all samples in the dataset have the same length! {dataset}: {index} ({len(content[index].split())})({len_item})')
+
             if self.config_sliding_window > 1 and (index < (self.config_sliding_window - 1) or content[index - (self.config_sliding_window - 1)].split()[0] != content[index].split()[0]):
-                removing_label = int(content[index].split()[label_index])
-                if removing_label != 0 and propheticus.shared.Utils.getClassDescriptionById(removing_label) not in self.datasets_exclude_classes:
-                    label_ = propheticus.shared.Utils.getClassDescriptionById(removing_label)
-                    propheticus.shared.Utils.printFatalMessage(f'A sample with a relevant target was about to be removed! {label_}')
+                # NOTE: tirei isto pq pode acontecer que as features a tirar ja tenham classe; isto diz respeito a 1º condicao, < sliding_window
+                # removing_label = int(content[index].split()[label_index])
+                # if removing_label != 0 and propheticus.shared.Utils.getClassDescriptionById(removing_label) not in self.datasets_exclude_classes:
+                #     label_ = propheticus.shared.Utils.getClassDescriptionById(removing_label)
+                #     propheticus.shared.Utils.printFatalMessage(f'A sample with a relevant target was about to be removed! {label_}')
 
                 continue
 
@@ -483,8 +526,8 @@ class DataManagement(object):
 
                 Item = ContentItem
 
-            # TODO: this needs to change to implement deltas as features
-            label = int(Item[slide_label_index])
+            label_data_type = self.datasets_headers_details[label_index]['type']
+            label = self.castDataByHeaderDataType(Item[slide_label_index], label_data_type)
 
             if self.config_sliding_window > 1:
                 direct_label = int(content[index].split()[label_index])
@@ -493,57 +536,72 @@ class DataManagement(object):
                     label_ = propheticus.shared.Utils.getClassDescriptionById(label)
                     propheticus.shared.Utils.printFatalMessage(f'Slided label is different than the original! Correct: {direct_label_} Slided: {label_}')
 
-            if propheticus.shared.Utils.getClassDescriptionById(label) in self.datasets_exclude_classes:
+            target_label = propheticus.shared.Utils.getClassDescriptionById(label)
+            if target_label in self.datasets_exclude_classes:
                 continue
 
-            # NOTE: the following line was required to create rec.array, it only accepts a list of tuples
-            # DatasetData.append(tuple(Item[self.config_sliding_window:]))
-
             start_index = self.config_sliding_window if use_description_field else 0
-            DatasetData.append(Item[start_index:])
-            DatasetDescriptions.append(Item[0] if use_description_field else '-')
+
+            if len_filter_features > 0 and 0 in FilterFeaturesIndexes:
+                if use_description_field is False:
+                    propheticus.shared.Utils.printFatalMessage(f'To filter by description "use_description_field" must be True')
+
+                if not propheticus.shared.Utils.inString(Item[0], FilterFeaturesIndexes[0].split(',')):
+                    continue
+
+            DatasetData.append(tuple(Item[start_index:]))
+
+            description = self.getDescriptionByItem(Item, dataset, self.datasets_headers_details) if use_description_field else '-'
+
+            DatasetDescriptions.append(description)
 
             if binary_classification and label != Config.ClassesMapping['Binary_Base']:
                 label = Config.ClassesMapping['Binary_Error']
 
-            target = propheticus.shared.Utils.getClassDescriptionById(label)
+            if label in datasets_classes_remap:
+                target = datasets_classes_remap[label]
+            else:
+                target = target_label
+
             DatasetTargets.append(target)
 
         del content
 
-        '''
-        NOTE:
-        Do not remove the following code! Initial approach to handle different data types and create recarray from it.
-        However, as the data is afterwards normalized, and categorical values must be converted to OneHotEncoding, 
-        this is no longer strictly necessary/useful. Nonetheless, leave the code for future consideration.
-        '''
-        # if len(self.datasets_headers_details) != 0:
-        #     HeadersDataTypes = [None] * len(self.datasets_headers_details[1:]) * self.config_sliding_window
-        #     for window in range(self.config_sliding_window):
-        #         HeadersDataTypes[window::self.config_sliding_window] = [(self.datasets_headers[h_index + 1], DBI.PYTHON_NUMPY_DATA_TYPES_MAP[HeaderDetails['type']]) for h_index, HeaderDetails in enumerate(self.datasets_headers_details[1:])]
-        #
-        #     dtype = HeadersDataTypes
-        # else:
-        #     dtype = numpy.float64
-        #
-        # # NOTE: convert to structured numpy array to keep data types
-        # DatasetData = numpy.rec.array(DatasetData, dtype=dtype)
+        if len_filter_features > 0 and 0 in FilterFeaturesIndexes:
+            del FilterFeaturesIndexes[0]
+            len_filter_features = len(FilterFeaturesIndexes)
 
-        DatasetData = numpy.array(DatasetData, dtype=numpy.float64)
+        # NOTE: create named numpy array to handle mixed data types
+        HeadersDataTypes = [None] * len(self.datasets_headers_details[1:]) * self.config_sliding_window
+        for window in range(self.config_sliding_window):
+            HeadersDataTypes[window::self.config_sliding_window] = [(f'{self.datasets_headers[h_index + 1]}-{window}', self.getDataCastDataType(HeaderDetails['type'])) for h_index, HeaderDetails in enumerate(self.datasets_headers_details[1:])]
+
+        # NOTE: numpy structured arrays require the rows to be immutable, eg using tuples; https://numpy.org/doc/stable/user/basics.rec.html
+        DatasetData = numpy.array(DatasetData, dtype=HeadersDataTypes)
+
+        FeatureNames = numpy.array(HeadersDataTypes)[:, 0]
+
         if len(DatasetData) > 0:
             if len_filter_features > 0:
                 # NOTE: the following line subtracts the self.config_sliding_window value, as this is going to be used in the DatasetData object, which has the first self.config_sliding_window * label removed
 
-                for feature_id, Values in FilterFeaturesIndexes.items():
-                    results = numpy.in1d(DatasetData[:, (((feature_id + 1) * self.config_sliding_window) - 1) - self.config_sliding_window], numpy.array(Values.split(','), dtype=numpy.float32))
-                    temp = numpy.where(results)
+                # for feature_id, Values in FilterFeaturesIndexes.items():
+                #     results = numpy.in1d(DatasetData[:, (((feature_id + 1) * self.config_sliding_window) - 1) - self.config_sliding_window], numpy.array(Values.split(','), dtype=numpy.float32))
+                #     temp = numpy.where(results)
 
-                Filters = numpy.logical_and.reduce([numpy.in1d(DatasetData[:, (((feature_id + 1) * self.config_sliding_window) - 1) - self.config_sliding_window], numpy.array(Values.split(','), dtype=numpy.float32)) for feature_id, Values in FilterFeaturesIndexes.items()])
+                FilteredData = []
+                for feature_id, Values in FilterFeaturesIndexes.items():
+                    feature_name, feature_data_type = HeadersDataTypes[(((feature_id + 1) * self.config_sliding_window) - 1) - self.config_sliding_window]
+                    FilteredData.append(numpy.in1d(DatasetData[feature_name], numpy.array(Values.split(','), dtype=feature_data_type)))
+
+                Filters = numpy.logical_and.reduce(FilteredData)
                 _Indexes = numpy.where(Filters)
+
                 DatasetData = DatasetData[_Indexes]
                 DatasetTargets = numpy.array(DatasetTargets)[_Indexes].tolist()
                 DatasetDescriptions = numpy.array(DatasetDescriptions)[_Indexes].tolist()
 
+            # NOTE: filtering cannot be done before deleting rows because then the indexes will be mismatched
             DeleteIndexes = [slide_label_index]
             if len_exclude_features > 0:
                 ExcludedFeaturesIndexes = list(set(numpy.hstack([FeaturesIndexes[label] for label in ExcludedFeaturesLabels])))
@@ -553,11 +611,34 @@ class DataManagement(object):
                 DeleteIndexes = numpy.array([numpy.array(DeleteIndexes) - window for window in range(0, self.config_sliding_window)]).ravel()
 
             DeleteIndexes = list(numpy.array(DeleteIndexes) - self.config_sliding_window)  # NOTE: this line is required as we are going to remove from DatasetData, which already does not have the initial labels
-            DatasetData = numpy.delete(DatasetData, DeleteIndexes, 1)
+            DeleteFeatureNames = FeatureNames[DeleteIndexes]
+            DatasetData = propheticus.shared.Utils.deleteFromStructuredArray(DatasetData, DeleteFeatureNames)
+
+            ReducedDType = [row for index, row in enumerate(HeadersDataTypes) if index not in DeleteIndexes]  # NOTE: numpy.delete does not work with structured arrays
+            UniqueDTypes = list(set(numpy.array(ReducedDType)[:, 1]))
+
+            if len(UniqueDTypes) > 1:
+                propheticus.shared.Utils.printFatalMessage(f'Multiple types of data have been detected in the dataset. Currently Propheticus relies on some techniques that cannot handle such data by defaults')
+            else:
+                # NOTE: this will only cast the whole array to the same data type, instead of being a structured array
+                # (although all features have the same type); scikit packages currently cannot handle structured arrays
+                DatasetData = numpy.array(DatasetData.tolist(), dtype=UniqueDTypes[0])
         else:
             propheticus.shared.Utils.printWarningMessage('No samples were chosen from the dataset: ' + dataset)
 
         return DatasetData, DatasetDescriptions, DatasetTargets, dataset
+
+    @propheticus.shared.Decorators.custom_hook()
+    def getDescriptionByItem(self, Item, dataset, DatasetHeadersDetails):
+        # NOTE: this function is merely for overloading
+        return Item[0]
+
+    def getDataCastDataType(self, data_type):
+        return getattr(numpy, 'object' if data_type == 'string' else data_type)
+
+    def castDataByHeaderDataType(self, value, data_type):
+        cast_value = getattr(numpy, 'str' if data_type == 'string' else data_type)(value)
+        return cast_value
 
     def _undersampleData(self, dataset):
         # NOTE: this function does not consider categorical features because it only uses the label index
@@ -566,6 +647,7 @@ class DataManagement(object):
 
     def _undersampleSequentialData(self, dataset):
         label_index = self.pre_target['index'] if self.pre_target is not False else len(self.datasets_headers) - 1
+        label_data_type = self.datasets_headers_details[label_index]['type']
 
         Classes = {}
 
@@ -587,7 +669,7 @@ class DataManagement(object):
             if len(Item) <= 1:
                 exit('Datasets files cannot contain empty lines: ' + dataset)
 
-            target = int(Item[label_index])
+            target = self.castDataByHeaderDataType(Item[label_index], label_data_type)
             run = description = Item[0]
 
             # NOTE: undersampling for sequential data does so by removing complete runs to avoid broken sequences
@@ -599,8 +681,9 @@ class DataManagement(object):
                 if run not in CleanRuns:
                     CleanRuns[run] = []
                 CleanRuns[run].append(index)
-            elif target != Config.ClassesMapping['RemoveDeltaTL'] and run in CleanRuns:
-                del CleanRuns[run]
+            elif target != Config.ClassesMapping['RemoveDeltaTL']:
+                if run in CleanRuns:
+                    del CleanRuns[run]
                 FailureRuns[run] = True
 
             if run not in ClassesByRun:

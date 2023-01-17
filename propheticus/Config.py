@@ -4,6 +4,7 @@ Contains all the available static configurations
 import os
 import sys
 import multiprocessing
+import multiprocessing.shared_memory
 import json
 
 import propheticus.configs
@@ -67,30 +68,20 @@ class Config(
     publication_format = use_transparency
     """controls if generated images contain detailed information (numbers instead of %, descriptions, ...)"""
 
+    force_n_jobs_1 = False
     demonstration_mode = False
 
     force_configurations_log = True
+    thread_config_shared_memory_name = 'pool_thread_configs'
 
     classification_conf_matrix_show_sample_count = True
+
+    classification_save_predictions_probabilities = True
+    classification_save_predictions_labels = True
 
     hash_config_basename = True
     """controls if generated files' names are hashed or not"""
 
-    # OS_PATH = os.path.dirname(os.path.abspath(__file__)) + "/"
-    OS_PATH = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
-    """current absolute path"""
-
-    # High-level paths
-    framework_instances_path = os.path.join(OS_PATH, 'instances')
-    """this variable defines the framework instances dir"""
-
-    framework_configs_path = os.path.join(OS_PATH, 'propheticus', 'configs')
-    framework_demo_path = os.path.join(framework_configs_path, 'demo')
-    framework_demo_file_path = os.path.join(framework_demo_path, 'complete_demonstration.xlsx')
-    framework_temp_path = os.path.join(OS_PATH, '.temp')
-    framework_temp_thread_config_file_path = os.path.join(framework_temp_path, '.thread_conf.txt')
-
-    #
     # framework_instance = 'failure_prediction'
     # # framework_instance = 'vulnerability_prediction'
     # """this variable allows defines the instance that will be used for configuring the framework instantiation; this can eventually become configurable"""
@@ -99,9 +90,9 @@ class Config(
     """defines the the level where threading is to be made"""
 
     max_thread_count = multiprocessing.cpu_count() - 2
-    # max_thread_count = 1
+    max_thread_count = 1
     if max_thread_count > multiprocessing.cpu_count():
-       exit('The number of chosen threads is higher than the number of CPUs. Redefining to MAX_CPU - 1')
+        exit('The number of chosen threads is higher than the number of CPUs. Redefining to MAX_CPU - 1')
 
     """defines the max number of threads to be used"""
 
@@ -111,10 +102,10 @@ class Config(
     pool_maxtasksperchild = 5
 
     MetricsByScenarios = {
-        'Business-critical': ['f2-score', 'recall'],
+        'Business-critical': ['inf. * rec.', 'recall'],  # norminfrecall
         'Heightened-critical': ['informedness', 'recall'],
-        'Best effort': ['f1-score', 'recall'],
-        'Minimum effort': ['markedness', 'precision']
+        'Best effort': ['f1-score', 'precision'],
+        'Minimum effort': ['mkd. * prec', 'precision']
     }
     ComparisonScenarios = list(MetricsByScenarios.keys())
 
@@ -124,6 +115,7 @@ class Config(
 
         'RemoveInvalidDeltaTL': 8,  # NOTE: used to samples which do not have enough lead time between injection and failure
         'RemoveDeltaTL': 9,  # NOTE: used to samples which are already after the lead time separation
+        'RemoveAfterFailure': 10,  # NOTE: used to samples which are already after the first failure timestamp
 
         'Baseline': 0,
         'Event': 1
@@ -133,15 +125,36 @@ class Config(
         ClassesMapping['Binary_Error']: 'General Error',
         ClassesMapping['RemoveInvalidDeltaTL']: 'Invalid DeltaTL',
         ClassesMapping['RemoveDeltaTL']: 'Remove DeltaTL',
+        ClassesMapping['RemoveAfterFailure']: 'Remove After Failure',
     }
 
     InitialConfigurations = {
-            'config_seed_count': 30,
-            'config_cv_fold': 10,
-            'config_grid_search': False
+        'config_seed_count': 30,
+        'config_grid_search': False
     }
 
     ValidUUID = []
+
+    # OS_PATH = os.path.dirname(os.path.abspath(__file__)) + "/"
+    OS_PATH = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
+    """current absolute path"""
+
+    @staticmethod
+    def defineBasePaths():
+        # High-level paths
+        Config.framework_instances_path = os.path.join(Config.OS_PATH, 'instances')
+        """this variable defines the framework instances dir"""
+
+        Config.framework_path = os.path.join(Config.OS_PATH, 'propheticus')
+
+        Config.framework_configs_path = os.path.join(Config.framework_path, 'configs')
+        Config.framework_classification_path = os.path.join(Config.framework_path, 'classification')
+        Config.framework_classification_algorithms_path = os.path.join(Config.framework_classification_path, 'algorithms')
+        Config.framework_demo_path = os.path.join(Config.framework_configs_path, 'demo')
+        Config.framework_demo_file_path = os.path.join(Config.framework_demo_path, 'complete_demonstration.xlsx')
+        Config.framework_temp_persistent_path = os.path.join(Config.OS_PATH, '.temp_persisted')
+        Config.framework_temp_path = os.path.join(Config.OS_PATH, '.temp')
+        Config.framework_temp_thread_config_file_path = os.path.join(Config.framework_temp_path, '.thread_conf.txt')
 
     @staticmethod
     def defineDependentPaths(framework_instance):
@@ -166,12 +179,19 @@ class Config(
         Config.framework_instance_generated_logs_path = os.path.join(Config.framework_instance_generated_path, '7-log')
         Config.framework_instance_generated_comparisons_path = os.path.join(Config.framework_instance_generated_path, '8-comparison')
         Config.framework_instance_generated_archive_path = os.path.join(Config.framework_instance_generated_path, '9-archive')
+        Config.framework_instance_generated_persistent_path = os.path.join(Config.framework_instance_generated_path, '10-persistent')
+
+Config.defineBasePaths()
 
 # NOTE: THIS IS EXECUTED UPON IMPORT
-if os.path.isfile(Config.framework_temp_thread_config_file_path):
-    with open(Config.framework_temp_thread_config_file_path, encoding='utf-8') as f:
-        ThreadConfigs = json.load(f)
-        Config.defineDependentPaths(ThreadConfigs['framework_instance'])
-        if ThreadConfigs['thread_level_'] is not None:
-            Config.thread_level_ = ThreadConfigs['thread_level_']
+try:
+    ThreadConfigs = multiprocessing.shared_memory.ShareableList(name=Config.thread_config_shared_memory_name)
+    Config.defineDependentPaths(ThreadConfigs[0])
+    if ThreadConfigs[1] is not None:
+        Config.thread_level_ = ThreadConfigs[1]
+    ThreadConfigs.shm.close()
+    # ThreadConfigs.shm.unlink()
+
+except Exception as e:
+    pass
 

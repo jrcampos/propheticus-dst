@@ -8,7 +8,10 @@ import statsmodels.stats.diagnostic
 import operator
 import copy
 import openpyxl
+
+# TODO: change xlrd to openpyxl
 import xlrd
+
 import hashlib
 import pandas
 import itertools
@@ -19,7 +22,7 @@ import subprocess
 import pathlib
 import shutil
 import math
-
+import json
 import propheticus
 import propheticus.shared
 
@@ -48,20 +51,29 @@ class ExperimentsComparison(object):
         ClassificationComparisonLog = [['Focused Metrics: '] + (FocusMetrics if FocusMetrics is not False else ['None'])]
         # ClusteringComparisonLog = []
 
+        # NOTE: add fields here if necessary to inclue in the classification logs details
         DescriptiveFields = [
             'config_binary_classification',
+            'config_data_split_parameters',
+            'config_seed_count',
             'config_sliding_window',
+            'config_undersampling_threshold',
+            'custom_hash_parameters',
             'datasets',
-            'datasets_exclude_run_classes',
+            'datasets_classes_remap',
             'pre_target',
             'proc_balance_data',
+            'proc_balance_data_parameters',
             'proc_classification',
             'proc_classification_algorithms_parameters',
             'proc_reduce_dimensionality'
         ]
+        DescriptiveFields = sorted(DescriptiveFields)
 
         LogDescriptiveFields = copy.deepcopy(DescriptiveFields)
         LogDescriptiveFields.remove('proc_classification')
+
+        # TODO: we must validate that all the experimetns have the same metrics/order!
 
         Metrics, ClassificationComparison, RunDetails, RunDetailsByRun, ResultsCV, TimesByExperiment, Results = self.parseResults(CompareExperiments)
 
@@ -69,7 +81,9 @@ class ExperimentsComparison(object):
         '''
         Validate that all the experiments have the same size and a mininum of 30 runs
         '''
+        error_shown = False
         min_runs = 30
+        execute_statistical_tests = True
         error = reference_runs_length = False
         for experiment, _Algorithms in ResultsCV.items():
             if len(CompareExperiments) < 2 and len(_Algorithms) < 2:
@@ -79,37 +93,67 @@ class ExperimentsComparison(object):
             for algorithm, _Metrics in _Algorithms.items():
                 algorithm_metrics_lentgh = len(_Metrics[list(_Metrics.keys())[0]])
                 if algorithm_metrics_lentgh < min_runs:
-                    propheticus.shared.Utils.printErrorMessage('Experiment have the minimum number of runs: ' + str(algorithm_metrics_lentgh) + ' - ' + experiment, acknowledge=False)
-                    error = True
+                    execute_statistical_tests = False
 
-                if algorithm_metrics_lentgh != reference_runs_length and reference_runs_length is not False:
-                    propheticus.shared.Utils.printErrorMessage('Not all the statistical tests have the same number of experiments')
-                    error = True
+                if algorithm_metrics_lentgh != reference_runs_length and reference_runs_length is not False and not error_shown:
+                    propheticus.shared.Utils.printWarningMessage('Not all the statistical tests have the same number of experiments')
+                    execute_statistical_tests = False
+                    error_shown = True
 
                 reference_runs_length = algorithm_metrics_lentgh
+
+        if execute_statistical_tests is False:
+            propheticus.shared.Utils.printWarningMessage('Not all experiments have the required minimum number of runs. No statistical comparison will be done', acknowledge=False)
 
         if error is True:
             return
 
-        ClassificationComparisonLog += self.generateExperimentsRanking(Results, FocusMetrics)
+        ExperimentsRanking, Ranking = self.generateExperimentsRanking(Results, FocusMetrics)
+        ClassificationComparisonLog += ExperimentsRanking
         ClassificationComparisonLog.append(['Hash', 'Experiment', 'Algorithm'] + LogDescriptiveFields + Metrics)
 
         '''
         Parse results to the intended file structure
         '''
+        ExperimentDetails = {}
         for algorithm, Experiments in ClassificationComparison.items():
             for experiment in Experiments:
                 DescriptiveFieldsData = self.getDescriptiveFieldsDataByExperimentDetails(RunDetailsByRun[experiment], LogDescriptiveFields)
-                ClassificationComparisonLog.append([AvailableExperiments[experiment]['filename'], experiment, algorithm] + DescriptiveFieldsData + ClassificationComparison[algorithm][experiment])
+                ExperimentDetails[f'{experiment} - {algorithm}'] = [AvailableExperiments[experiment]['filename'], experiment, algorithm] + DescriptiveFieldsData + ClassificationComparison[algorithm][experiment]
+
+        if Ranking is not None:
+            RankedExperiments = [Rank[0] for Rank in Ranking]
+            RankedFiles = list({Rank[0].split(' - ')[0]: 0 for Rank in Ranking}.keys())
+            RankedExperimentDetails = sorted(ExperimentDetails.items(), key=lambda pair: RankedExperiments.index(pair[0]))
+
+            RunDetailsDict = {Details[0]: Details for Details in RunDetails[1:]}
+            SortedRunDetails = sorted(RunDetailsDict.items(), key=lambda pair: RankedFiles.index(pair[0]))
+            RunDetails = [RunDetails[0]] + [Details for experiment, Details in SortedRunDetails]
+        else:
+            RankedExperimentDetails = ExperimentDetails.items()
+
+        for experiment, Details in RankedExperimentDetails:
+            ClassificationComparisonLog.append(Details)
 
         # NOTE: How to save with color
         # from openpyxl.styles import PatternFill
         # sheet['A1'].fill = PatternFill(bgColor="FFC7CE", fill_type="solid")
 
-        DimensionalityReductionReport = self.parseDimensionalityReductionLog(ClassificationComparison, RunDetailsByRun, DescriptiveFields)
-        StatisticalAnalysisReport = self.performStatisticalAnalysis(StatisticalDetails, ResultsCV)
+        max_report_records = 20
+        if len(CompareExperiments) < max_report_records:
+            DimensionalityReductionReport = self.parseDimensionalityReductionLog(ClassificationComparison, RunDetailsByRun, DescriptiveFields)
 
-        comparisons_hash = hashlib.md5(str.encode(",".join(sorted(Experiments)))).hexdigest()
+            if execute_statistical_tests is True:
+                StatisticalAnalysisReport = self.performStatisticalAnalysis(StatisticalDetails, ResultsCV)
+            else:
+                StatisticalAnalysisReport = []
+        else:
+            propheticus.shared.Utils.printWarningMessage('Too many experiments selected, only ranking will be done')
+
+            StatisticalAnalysisReport = []
+            DimensionalityReductionReport = []
+
+        comparisons_hash = hashlib.md5(str.encode(",".join(sorted(CompareExperiments)) + json.dumps(StatisticalDetails) + json.dumps(FocusMetrics))).hexdigest()
         self.save_items_path = os.path.join(Config.framework_instance_generated_comparisons_path, comparisons_hash)
         SheetNames = ['Report', 'Metrics', 'Stats', 'Details']  # 'Dim. Red.',
         propheticus.shared.Utils.saveExcel(
@@ -125,53 +169,61 @@ class ExperimentsComparison(object):
             show_demo=False
         )
 
-        self.generateTimeComplexityGraphs(comparisons_hash, TimesByExperiment)
-        self.generatePerformanceReportGraphs(comparisons_hash, Results, FocusMetrics)
-        self.generatePerformanceGraphs(comparisons_hash, Results, FocusMetrics)
+        if len(CompareExperiments) < max_report_records:
+            self.generateTimeComplexityGraphs(comparisons_hash, TimesByExperiment)
+            self.generatePerformanceReportGraphs(comparisons_hash, Results, FocusMetrics)
+            self.generatePerformanceGraphs(comparisons_hash, Results, FocusMetrics)
 
-        '''
-        Associate relevant experiment images with the comparison file
-        '''
-        wb_path = os.path.join(Config.framework_instance_generated_comparisons_path, comparisons_hash + '.Log.xlsx')
-        Workbook = openpyxl.load_workbook(wb_path)
-        Worksheet = Workbook.worksheets[1]
-        row = 1
+            # TODO: this should be ordered according to ranking
 
-        image_column_increase = 10
-        image_row_increase = 25
-        column = 1
-        Images = {
-            'performance_metrics_by_metric': 'Performance Metrics by Metric',
-            'performance_report_metrics_by_metric': 'Performance Report Metrics by Metric',
-            'performance_metrics_by_experiment': 'Performance Metrics by Experiments',
-            'performance_report_metrics_by_experiment': 'Performance Report Metrics by Experiments',
-            'time_metrics': 'Time Complexity'
-        }
+            '''
+            Associate relevant experiment images with the comparison file
+            '''
+            wb_path = os.path.join(Config.framework_instance_generated_comparisons_path, comparisons_hash + '.Log.xlsx')
+            Workbook = openpyxl.load_workbook(wb_path)
+            Worksheet = Workbook.worksheets[1]
+            row = 1
 
-        for image_file_name, image_title in Images.items():
-            Worksheet.cell(row=row, column=column).value = image_title
-            comparisons_file_path = os.path.join(Config.framework_instance_generated_comparisons_path, comparisons_hash)
-            time_metrics_img_path = os.path.join(comparisons_file_path, image_file_name + '.png')
-            if os.path.isfile(time_metrics_img_path):
-                img = openpyxl.drawing.image.Image(time_metrics_img_path)
-                Worksheet.add_image(img, openpyxl.utils.cell.get_column_letter(column) + str(row))  # NOTE: (not working though) the reason the image is on the same of the description is to allow filtering in excel
-            else:
-                propheticus.shared.Utils.printErrorMessage(image_title + ' - image does not exist for configurations ' + comparisons_hash)
+            image_column_increase = 10
+            image_row_increase = 25
+            column = 1
+            Images = {
+                'performance_metrics_by_metric': 'Performance Metrics by Metric',
+                'performance_report_metrics_by_metric': 'Performance Report Metrics by Metric',
+                'performance_metrics_by_experiment': 'Performance Metrics by Experiments',
+                'performance_report_metrics_by_experiment': 'Performance Report Metrics by Experiments',
+                'time_metrics': 'Time Complexity'
+            }
 
-            # column += image_column_increase
-            row += image_row_increase
+            for image_file_name, image_title in Images.items():
+                Worksheet.cell(row=row, column=column).value = image_title
+                comparisons_file_path = os.path.join(Config.framework_instance_generated_comparisons_path, comparisons_hash)
+                time_metrics_img_path = os.path.join(comparisons_file_path, image_file_name + '.png')
+                if os.path.isfile(time_metrics_img_path):
+                    img = openpyxl.drawing.image.Image(time_metrics_img_path)
+                    Worksheet.add_image(img, openpyxl.utils.cell.get_column_letter(column) + str(row))  # NOTE: (not working though) the reason the image is on the same of the description is to allow filtering in excel
+                else:
+                    propheticus.shared.Utils.printErrorMessage(image_title + ' - image does not exist for configurations ' + comparisons_hash)
 
-        temp_img_path = None
-        Worksheet = Workbook.worksheets[0]
-        row = len(ClassificationComparisonLog) + 2
-        for algorithm, Experiments in ClassificationComparison.items():
-            for experiment in Experiments:
+                # column += image_column_increase
+                row += image_row_increase
+
+            temp_img_path = None
+            Worksheet = Workbook.worksheets[0]
+            row = len(ClassificationComparisonLog) + 2
+            TempImgs = []
+
+            for _, Details in RankedExperimentDetails:
+                experiment = Details[1]
+                algorithm = Details[2]
                 experiment_file_name = AvailableExperiments[experiment]['filename']
                 subfolder = AvailableExperiments[experiment]['subfolder']
-                cm_img_path = os.path.join(Config.framework_instance_generated_classification_path, subfolder, experiment_file_name.replace('.Log.xlsx', '') + '.' + algorithm + "_cm.png")
+                cm_img_filename = os.path.join(experiment_file_name.replace('.Log.xlsx', '') + '.' + algorithm + "_cm.png")
+                cm_img_path = os.path.join(Config.framework_instance_generated_classification_path, subfolder, cm_img_filename)
                 if os.path.isfile(cm_img_path):
                     pathlib.Path(propheticus.Config.framework_temp_path).mkdir(parents=True, exist_ok=True)
-                    temp_img_path = os.path.join(propheticus.Config.framework_temp_path, 'temp_cm.png')
+                    temp_img_path = os.path.join(propheticus.Config.framework_temp_path, cm_img_filename)
+                    TempImgs.append(temp_img_path)
                     shutil.copyfile(cm_img_path, temp_img_path)
 
                     img = Image.open(temp_img_path)
@@ -184,7 +236,7 @@ class ExperimentsComparison(object):
                     img = openpyxl.drawing.image.Image(temp_img_path)
                     Worksheet.add_image(img, openpyxl.utils.cell.get_column_letter(2) + str(row + 1))
                 else:
-                    propheticus.shared.Utils.printErrorMessage('Confusion matrix image does not exist for experiment: ' + experiment_file_name.replace('.Log.xlsx', ''))
+                    propheticus.shared.Utils.printErrorMessage('Confusion matrix image does not exist for experiment: ' + experiment_file_name.replace('.Log.xlsx', ''), acknowledge=False)
 
                 DescriptiveFieldsData = self.getDescriptiveFieldsDataByExperimentDetails(RunDetailsByRun[experiment], LogDescriptiveFields)
                 Details = [experiment_file_name, experiment, algorithm] + DescriptiveFieldsData + ClassificationComparison[algorithm][experiment]
@@ -192,11 +244,11 @@ class ExperimentsComparison(object):
                     Worksheet.cell(row=row, column=(index + 1)).value = value
                 row += 26
 
-        comparisons_file_path = os.path.join(Config.framework_instance_generated_comparisons_path, comparisons_hash + '.Log.xlsx')
-        Workbook.save(comparisons_file_path)
+            comparisons_file_path = os.path.join(Config.framework_instance_generated_comparisons_path, comparisons_hash + '.Log.xlsx')
+            Workbook.save(comparisons_file_path)
 
-        if temp_img_path is not None:
-            os.remove(temp_img_path)
+            for temp_img_path in TempImgs:
+                os.remove(temp_img_path)
 
         if Config.demonstration_mode is True:
             propheticus.shared.Utils.openExternalFileDemo(comparisons_file_path)
@@ -213,15 +265,30 @@ class ExperimentsComparison(object):
             for experiment, Algorithms in Results.items():
                 for algorithm, Metrics in Algorithms.items():
                     _Metrics = {key.lower(): value for key, value in Metrics.items()}
-                    PerformanceByExperimentList.append([experiment + ' - ' + algorithm] + numpy.around([_Metrics[i] for i in FocusMetrics], 3).tolist())
+                    PerformanceByExperimentList.append([f'{experiment} - {algorithm}'] + numpy.around([_Metrics[i] for i in FocusMetrics], 3).tolist())
 
             # NOTE: PerformanceByExperimentList is created with the order and metrics defined by the FocusMetrics
             Ranking = sorted(PerformanceByExperimentList, key=operator.itemgetter(*range(1, len(FocusMetrics) + 1)), reverse=True)
             RankingLog += [[index + 1] + Rank for index, Rank in enumerate(Ranking)]
         else:
             RankingLog.append(['No scenario selected'])
+            Ranking = None
 
-        return RankingLog + [[]]
+        return (RankingLog + [[]], Ranking)
+
+    def _openLogs(self, experiment, Details ):
+        experiment_file_name = Details['filename']
+        subfolder = Details['subfolder']
+        wb_path = os.path.join(Config.framework_instance_generated_logs_path, subfolder, experiment_file_name)
+
+        Workbook = openpyxl.load_workbook(wb_path)
+        DetailsWorksheet = Workbook.worksheets[0]
+
+        DetailsData = [[DetailsWorksheet.cell(row_index, col_index).value for col_index in range(1, DetailsWorksheet.max_column + 1)] for row_index in range(1, DetailsWorksheet.max_row + 1)]
+        ClassificationWorksheet = Workbook.worksheets[1]
+        ClassificationData = [[ClassificationWorksheet.cell(row_index, col_index).value for col_index in range(1, ClassificationWorksheet.max_column+1)] for row_index in range(1, ClassificationWorksheet.max_row+1)]
+
+        return experiment, DetailsData, ClassificationData
 
     def parseResults(self, CompareExperiments):
         RunDetails = [['Experiment', 'Details']]
@@ -233,26 +300,29 @@ class ExperimentsComparison(object):
         ClassificationComparison = {}
 
         AvailableExperiments = propheticus.shared.Utils.getAvailableExperiments(skip_config_parse=True)
-        for experiment in CompareExperiments:
+        LogsByExp = propheticus.shared.Utils.pool(Config.max_thread_count, self._openLogs, [(experiment, AvailableExperiments[experiment]) for experiment in CompareExperiments])
+        propheticus.shared.Utils.printStatusMessage('Parsed all log files')
+
+        for experiment, DetailsData, ClassificationData in LogsByExp:
             Results[experiment] = {}
             ResultsCV[experiment] = {}
             experiment_file_name = AvailableExperiments[experiment]['filename']
             subfolder = AvailableExperiments[experiment]['subfolder']
-            wb_path = os.path.join(Config.framework_instance_generated_logs_path, subfolder, experiment_file_name)
-            Workbook = xlrd.open_workbook(wb_path)
 
-            DetailsWorksheet = Workbook.sheet_by_index(0)
-            ClassificationWorksheet = Workbook.sheet_by_index(1)
-            ClusteringWorksheet = Workbook.sheet_by_index(2)
+            RunDetails.append([experiment, DetailsData[0][0]])
+            RunDetailsByRun[experiment] = DetailsData[0][0]
 
-            RunDetails.append([experiment, DetailsWorksheet.cell(0, 0).value])
-            RunDetailsByRun[experiment] = DetailsWorksheet.cell(0, 0).value
+            classification_nrows = len(ClassificationData)
+            ExpMetrics = [ClassificationData[2][col_index] for col_index in range(1, len(ClassificationData[2]))]
 
             if Metrics is None:
-                Metrics = [ClassificationWorksheet.cell(2, col_index).value for col_index in range(2, ClassificationWorksheet.ncols)]
+                Metrics = ExpMetrics
 
-            for row_index in range(3, ClassificationWorksheet.nrows):
-                cell_value = ClassificationWorksheet.cell(row_index, 0).value
+            if ExpMetrics != Metrics:
+                propheticus.shared.Utils.printFatalMessage(f'The metrics available in the logs are different across experiments: {Metrics} vs {ExpMetrics} {sorted(set(ExpMetrics).symmetric_difference(set(Metrics)))}')
+
+            for row_index in range(3, len(ClassificationData)):
+                cell_value = ClassificationData[row_index][0]
                 if cell_value.strip() == '':
                     continue
 
@@ -261,9 +331,9 @@ class ExperimentsComparison(object):
                     if algorithm not in ResultsCV[experiment]:
                         ResultsCV[experiment][algorithm] = {}
 
-                    for col_index in range(1, ClassificationWorksheet.ncols):
-                        metric = ClassificationWorksheet.cell(2, col_index).value.lower()
-                        value = ClassificationWorksheet.cell(row_index, col_index).value
+                    for col_index in range(1, len(ClassificationData[row_index])):
+                        metric = ClassificationData[2][col_index].lower()
+                        value = ClassificationData[row_index][col_index]
                         if metric not in ResultsCV[experiment][algorithm]:
                             ResultsCV[experiment][algorithm][metric] = []
                         ResultsCV[experiment][algorithm][metric].append(value)
@@ -277,15 +347,15 @@ class ExperimentsComparison(object):
 
                     Results[experiment][algorithm] = {}
 
-                    for col_index in range(1, ClassificationWorksheet.ncols):
-                        metric = ClassificationWorksheet.cell(2, col_index).value
-                        value = ClassificationWorksheet.cell(row_index, col_index).value
+                    for col_index in range(1, len(ClassificationData[row_index])):
+                        metric = ClassificationData[2][col_index]
+                        value = ClassificationData[row_index][col_index]
                         if 'Time' in metric:
                             metric = metric.replace('Time: ', '')
                             if metric not in TimesByExperiment:
                                 TimesByExperiment[metric] = {}
 
-                            TimesByExperiment[metric][experiment + '-' + algorithm] = value if value.strip() != '' else '-1|-1'
+                            TimesByExperiment[metric][experiment + '-' + algorithm] = value if value is not None and value.strip() != '' else '-1|-1'
                         Results[experiment][algorithm][metric] = value
                         ClassificationComparison[algorithm][experiment].append(value)
 
@@ -485,7 +555,7 @@ class ExperimentsComparison(object):
                     if FocusMetrics is not False and metric.lower() not in FocusMetrics:
                         continue
 
-                    if not isinstance(value, str):
+                    if value is not None and not isinstance(value, str):
                         value = round(float(value), 2)
                         PerformanceExperimentMetricsData.append(value)
                         if metric not in PerformanceMetrics:
@@ -561,10 +631,12 @@ class ExperimentsComparison(object):
                 dimensionality_reduction_path = os.path.join(Config.framework_instance_generated_logs_path, subfolder, experiment_file_name.replace('.Log.', '.dimensionality_reduction.data.'))
                 if os.path.isfile(dimensionality_reduction_path) and experiment_file_name not in DimensionalityReductions:
                     # TODO: this code only accounts for 1 dimensionality reduction method; should be expanded to support multiple
-                    DRWorkbook = xlrd.open_workbook(dimensionality_reduction_path)
-                    DRSheet = DRWorkbook.sheet_by_index(0)
-                    for fr_row in range(DRSheet.nrows):
-                        if 'Removed Features' in DRSheet.cell(fr_row, 0).value:
+
+                    DRWorkbook = openpyxl.load_workbook(dimensionality_reduction_path)
+                    DRSheet = DRWorkbook.worksheets[0]
+
+                    for fr_row in range(1, DRSheet.max_row + 1):
+                        if 'Removed Features' in DRSheet.cell(fr_row, 1).value:
                             break
 
                     DimensionalityReductions[experiment_file_name] = [experiment_file_name, self.getDescriptiveFieldsByExperimentDetails(RunDetailsByRun[experiment], DescriptiveFields), DRSheet.cell(fr_row, 0).value] + DRSheet.row_values(fr_row + 1)
@@ -596,9 +668,6 @@ class ExperimentsComparison(object):
     '''
     def performStatisticalAnalysis(self, StatisticalDetails, ResultsCV):
         metric = StatisticalDetails['metric']
-        confidence_level = StatisticalDetails['confidence_level']
-        paired = StatisticalDetails['paired']
-        correction_method = StatisticalDetails['correction_method']
 
         ComparisonLabels = []
         ComparisonData = []
@@ -610,6 +679,13 @@ class ExperimentsComparison(object):
                 ComparisonLabels.append(experiment + ' - ' + algorithm)
                 ComparisonData.append(Metrics[metric])
 
+        return self._performStatisticalAnalysis(StatisticalDetails, ComparisonLabels, ComparisonData)
+
+    def _performStatisticalAnalysis(self, StatisticalDetails, ComparisonLabels, ComparisonData):
+        confidence_level = StatisticalDetails['confidence_level']
+        paired = StatisticalDetails['paired']
+        correction_method = StatisticalDetails['correction_method']
+
         ComparisonData = numpy.around(ComparisonData, 5)
 
         StatisticalAnalaysisSheet = [['Configurations']] + [['', key, value] for key, value in StatisticalDetails.items()]
@@ -617,7 +693,6 @@ class ExperimentsComparison(object):
         parametric = True
 
         NormalityTests = {
-            # 'Kolmogorov-Smirnov': self.testNormalityKolmogorovSmirnov,
             'Kol. Smir. Lilliefors': self.testNormalityLilliefors,
             'Shapiro-Wilk': self.testNormalityShapiroWilk
         }
@@ -702,6 +777,12 @@ class ExperimentsComparison(object):
         """
         # TODO: improve this logic; use https://pypi.org/project/scikit-posthocs/
 
+        '''
+        NOTE
+        Use Tukey and Dunn where adequate; for dependent ANOVA (repeated measures) use 
+        pairwise corrected dependent T-Test
+        '''
+
         ComparisonsLabels = []
         pValues = []
         for i in range(len(ComparisonData)):
@@ -733,8 +814,8 @@ class ExperimentsComparison(object):
                 # NOTE: paired test
                 if parametric is True:
                     # NOTE: parametric test
-                    statistical_value, pvalue = self.one_way_dep_anova(*Data)
-                    test = 'one_way_dep_anova'
+                    statistical_value, pvalue = self.rep_measures_dep_anova(*Data)
+                    test = 'rep_measures_dep_anova'
                 else:
                     # NOTE: non-parametric test
                     statistical_value, pvalue = scipy.stats.friedmanchisquare(*Data)
@@ -778,7 +859,7 @@ class ExperimentsComparison(object):
         return statistical_value, pvalue, test
 
     @staticmethod
-    def one_way_dep_anova(*args):
+    def rep_measures_dep_anova(*args):
         """
         Repeated measures One-Way ANOVA
         From Andy Field, "Discovering Statistics using SPSS (3rd ed.), chapter 13

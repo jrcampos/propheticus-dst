@@ -79,32 +79,32 @@ class Clustering(object):
                 }
             ]
         },
-        'gaussian_mixture': {
-            'package': 'sklearn.mixture',
-            'callable': 'GaussianMixture',
-            'parameters': {
-                'n_components': {'type': ''},
-                'covariance_type': {'type': ''},
-                'tol': {'type': ''},
-                'reg_covar': {'type': ''},
-                'max_iter': {'type': ''},
-                'n_init': {'type': ''},
-                'init_params': {'type': ''},
-                'weights_init': {'type': ''},
-                'means_init': {'type': ''},
-                'precisions_init': {'type': ''},
-                'random_state': {'hide': True, 'type': ''},
-                'warm_start': {'type': ''},
-                'verbose': {'type': ''},
-                'verbose_interval': {'type': ''}
-            },
-            'grid': [
-                {
-                    'n_components': [1, 4, 8],
-                    'covariance_type': ['spherical', 'tied', 'diag', 'full']
-                }
-            ]
-        },
+        # 'gaussian_mixture': {
+        #     'package': 'sklearn.mixture',
+        #     'callable': 'GaussianMixture',
+        #     'parameters': {
+        #         'n_components': {'type': ''},
+        #         'covariance_type': {'type': ''},
+        #         'tol': {'type': ''},
+        #         'reg_covar': {'type': ''},
+        #         'max_iter': {'type': ''},
+        #         'n_init': {'type': ''},
+        #         'init_params': {'type': ''},
+        #         'weights_init': {'type': ''},
+        #         'means_init': {'type': ''},
+        #         'precisions_init': {'type': ''},
+        #         'random_state': {'hide': True, 'type': ''},
+        #         'warm_start': {'type': ''},
+        #         'verbose': {'type': ''},
+        #         'verbose_interval': {'type': ''}
+        #     },
+        #     'grid': [
+        #         {
+        #             'n_components': [1, 4, 8],
+        #             'covariance_type': ['spherical', 'tied', 'diag', 'full']
+        #         }
+        #     ]
+        # },
         'kmeans': {
             'package': 'sklearn.cluster',
             'callable': 'KMeans',
@@ -118,7 +118,7 @@ class Clustering(object):
                 'verbose': {'type': ''},
                 'random_state': {'hide': True, 'type': ''},
                 'copy_x': {'type': ''},
-                'n_jobs': {'type': ''},
+                'n_jobs': {'type': '', 'default': -1},
                 'algorithm': {'type': ''}
             },
             'grid': [
@@ -127,19 +127,40 @@ class Clustering(object):
                 }
             ]
         },
+        'spectral': {
+            'package': 'sklearn.cluster',
+            'callable': 'SpectralClustering',
+            'parameters': {
+                'n_clusters': {'type': ''},
+                'eigen_solver': {'type': ''},
+                'n_components': {'type': ''},
+                'random_state': {'hide': True, 'type': ''},
+                'n_init': {'type': ''},
+                'gamma': {'type': ''},
+                'affinity': {'type': ''},
+                'n_neighbors': {'type': ''},
+                'eigen_tol': {'type': ''},
+                'assign_labels': {'type': ''},
+                'degree': {'type': ''},
+                'coef0': {'type': ''},
+                'kernel_params': {'type': ''},
+                'n_jobs': {'type': '', 'default': -1},
+                'verbose': {'type': ''},
+            }
+        },
         'dbscan': {
             'package': 'sklearn.cluster',
             'callable': 'DBSCAN',
             'callback': {'package': 'propheticus.core.Clustering', 'callable': 'DBSCAN'},
             'parameters': {
-                'eps': {'type': ''},
-                'min_samples': {'type': ''},
-                'metric': {'type': ''},
-                'metric_params': {'type': ''},
-                'algorithm': {'type': ''},
-                'leaf_size': {'type': ''},
-                'p': {'type': ''},
-                'n_jobs': {'type': ''}
+                'eps': {'type': 'float'},
+                'min_samples': {'type': 'int'},
+                'metric': {'type': 'str'},
+                'metric_params': {'type': 'dict'},
+                'algorithm': {'type': 'str', 'values': ['auto’, ‘ball_tree’, ‘kd_tree’, ‘brute']},
+                'leaf_size': {'type': 'int'},
+                'p': {'type': 'float'},
+                'n_jobs': {'type': '', 'default': -1}
             },
             'grid': [
                 {
@@ -172,5 +193,24 @@ class Clustering(object):
                     'linkage': ['ward']
                 }
             ]
+        },
+        'optics': {
+            'package': 'sklearn.cluster',
+            'callable': 'OPTICS',
+            'parameters': {
+                'min_samples': {'type': 'int'},
+                'max_eps': {'type': 'float'},
+                'metric': {'type': 'str'},
+                'p': {'type': 'int'},
+                'cluster_method': {'type': 'str'},
+                'eps': {'type': 'float'},
+                'xi': {'type': 'float'},
+                'predecessor_correction': {'type': 'boolean'},
+                'min_cluster_size': {'type': 'int'},
+                'algorithm': {'type': 'str', 'values': ['auto’, ‘ball_tree’, ‘kd_tree’, ‘brute']},
+                'leaf_size': {'type': 'int'},
+                'p': {'type': 'float'},
+                'n_jobs': {'type': '', 'default': -1}
+            },
         },
     }

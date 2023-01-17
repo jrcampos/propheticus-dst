@@ -4,7 +4,7 @@ Contains all the workflow logic to handle the clustering tasks
 import numpy
 import pandas
 import random
-import pandas.tools.plotting
+import pandas.plotting
 import sklearn.cluster
 import sklearn.metrics
 import sklearn.neighbors
@@ -22,6 +22,7 @@ import matplotlib.font_manager
 import pathlib
 import copy
 import importlib
+import warnings
 
 import propheticus
 import propheticus.core
@@ -58,8 +59,12 @@ class Clustering(object):
         self.configurations_id = kwargs['configurations_id']
         self.generated_files_base_name = kwargs['configurations_id'] + '.'
         self.display_visuals = kwargs['display_visuals']
+
         self.balance_data = kwargs['balance_data']
+        self.sampling_parameters = kwargs['balance_data_params']
         self.reduce_dimensionality = kwargs['reduce_dimensionality']
+        self.dim_red_parameters = kwargs['reduce_dimensionality_params']
+
         self.normalize = kwargs['normalize']
         self.seed_count = kwargs['seed_count']
         self.mode = kwargs['mode']
@@ -75,7 +80,7 @@ class Clustering(object):
 
         self.silhouette_threshold = 5000
 
-    def runModel(self, algorithm, Dataset, Parameters=False, GridSearchParameters=False, DimRedParameters=False, SamplingParameters=False):
+    def runModel(self, algorithm, Dataset, Parameters=False, GridSearchParameters=False):
         """
         Runs defined models for passed configurations
 
@@ -91,11 +96,6 @@ class Clustering(object):
 
         self.algorithms_parameters = Parameters
         self.grid_search_parameters = GridSearchParameters
-        self.dim_red_parameters = DimRedParameters
-        self.sampling_parameters = SamplingParameters
-
-        DataBalancingParameters = {}
-        DimRedParameters = {}
 
         file_path = os.path.join(Config.OS_PATH, self.save_items_path)
         pathlib.Path(file_path).mkdir(parents=True, exist_ok=True)
@@ -112,6 +112,7 @@ class Clustering(object):
             Data = Dataset['data']
             Target = Dataset['targets']
             Classes = Dataset['classes']
+            Descriptions = numpy.array(Dataset['descriptions'])
 
             if self.reduce_dimensionality:
                 if 'variance' in self.reduce_dimensionality:
@@ -125,7 +126,9 @@ class Clustering(object):
                     Data, RemoveFeatures, Headers, _ = propheticus.core.DatasetReduction.dimensionalityReduction(self.dataset_name, self.configurations_id, self.description, self.reduce_dimensionality, Data, Target, Headers, self.dim_red_parameters, seed)
 
             if self.balance_data and len(self.balance_data) > 0 and 'custom' not in algorithm:
-                Data, Target = propheticus.core.DatasetReduction.balanceDataset(Data, Target, self.sampling_parameters, seed=seed, method=self.balance_data)
+                Data, Target, BalanceDataEstimators = propheticus.core.DatasetReduction.balanceDataset(Data, Target, self.sampling_parameters, seed=seed, method=self.balance_data)
+                for Estimator in BalanceDataEstimators.values():
+                    Descriptions = Descriptions[Estimator.sample_indices_]
 
             CallArguments = copy.deepcopy(self.algorithms_parameters) if self.algorithms_parameters else {}
             AlgorithmCallDetails = Config.ClusteringAlgorithmsCallDetails[algorithm]
@@ -200,7 +203,7 @@ class Clustering(object):
                 model.fit(Data)
                 Clusters = list(model.labels_)
 
-            _return = self.plotClusterDistribution(algorithm, "", Clusters, Data, Target, Classes, algorithm, 0)
+            _return = self.plotClusterDistribution(algorithm, "", Clusters, Data, Target, Classes, Descriptions, algorithm, 0)
             if _return == -1:
                 return
 
@@ -222,7 +225,7 @@ class Clustering(object):
 
 
 
-    def plotClusterDistribution(self, base_suptitle, base_title, Clusters, Data, Target, Classes, algorithm, base_index=0, base_filename=''):
+    def plotClusterDistribution(self, base_suptitle, base_title, Clusters, Data, Target, Classes, Descriptions, algorithm, base_index=0, base_filename=''):
         """
         Plots the cluster distribution for passed configurations
 
@@ -247,6 +250,7 @@ class Clustering(object):
         """
         ClustersByTarget = dict((target, []) for target in Classes)
         ItemsByCluster = [dict((target, 0) for target in Classes) for i in range(max(Clusters) + numpy.abs(base_index-1))]
+        DescriptionsByCluster = [[] for i in range(max(Clusters) + numpy.abs(base_index-1))]
 
         if len(ItemsByCluster) == 0:
             print("!!! Error! No cluster created!!")
@@ -262,6 +266,7 @@ class Clustering(object):
 
             target = Target[i]
             ItemsByCluster[_cluster][target] += 1
+            DescriptionsByCluster[_cluster].append(target + '=>' + Descriptions[i].split('v1-NGcpu-')[1])  # TODO: REMOVE THIS SPLI!
 
         for i in range(max(Clusters) + numpy.abs(base_index-1)):
             #print("\n\nCluster " + str(i+1))
@@ -272,6 +277,12 @@ class Clustering(object):
                 #print(key + " => " + str(value))
                 if value > 0:
                     ClustersByTarget[key].append(str(i+1) + ":" + str(value))
+
+        save_path = os.path.join(self.save_items_path, algorithm)
+        pathlib.Path(save_path).mkdir(parents=True, exist_ok=True)
+        predictions_file_path = os.path.join(save_path, self.generated_files_base_name + '_clusters.txt')
+        with open(predictions_file_path, "w", encoding="utf-8") as File:
+            File.writelines("\n".join([f'Cluster {i} => {sorted(collections.Counter(DescriptionsByCluster[i]).items())}' for i in range(max(Clusters) + numpy.abs(base_index-1))]) + '\n')
 
         Data = [[value for key, value in Item.items()] for Item in ItemsByCluster]
         # Columns = [target + " " + "|".join(ClustersByTarget[target]) for target, Values in ItemsByCluster[0].items()]
@@ -300,11 +311,22 @@ class Clustering(object):
         # lgd = ax.legend(loc=9, bbox_to_anchor=(0.5, -0.1), prop=LengendFont)
         # ax.legend(bbox_to_anchor=(1.60, 1.02), prop=LengendFont)
 
-        ts = time.time()
-        propheticus.shared.Utils.saveImage(os.path.join(self.save_items_path, algorithm), self.generated_files_base_name + "_distribution_" + str(base_filename) + ".png", additional_artists=[lgd], bbox_inches="tight")
+        if Config.publication_format is False or Config.force_configurations_log is True:
+            if Config.force_configurations_log is True:
+                plt.annotate(self.description, (0, 0), (0, -40), xycoords='axes fraction', textcoords='offset points', va='top')
+            else:
+                plt.figtext(.02, .02, self.description, size='xx-small')
+        else:
+            plt.tight_layout()
 
-        if self.display_visuals is True:
-            propheticus.shared.Utils.showImage()
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)  # NOTE: can be used like this, but may suppress relevant warnings
+
+            ts = time.time()
+            propheticus.shared.Utils.saveImage(os.path.join(self.save_items_path, algorithm), self.generated_files_base_name + "_distribution_" + str(base_filename) + ".png", additional_artists=[lgd], bbox_inches="tight", dpi=150)
+
+            if self.display_visuals is True:
+                propheticus.shared.Utils.showImage()
 
         plt.close()
 

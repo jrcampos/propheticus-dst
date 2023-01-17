@@ -1,0 +1,13 @@
+[
+  115986650,
+  false,
+  false,
+  [
+    "RandomUnderSampler",
+    "SMOTE"
+  ],
+  [
+    "variance"
+  ],
+  "decision_tree"
+]

@@ -4,7 +4,7 @@ Contains the code for the analysis (exploratory and descriptive) of the data
 import collections
 import numpy
 import pandas
-import pandas.tools.plotting
+import pandas.plotting
 import sklearn
 import sklearn.datasets
 import sklearn.cluster
@@ -15,6 +15,7 @@ import sklearn.ensemble
 import sklearn.linear_model
 import sklearn.tree
 import sklearn.model_selection
+import sklearn.preprocessing
 import matplotlib.pyplot as plt
 import itertools
 import math
@@ -120,16 +121,16 @@ class DataAnalysis(object):
         if corr.isnull().values.any():
             propheticus.shared.Utils.printErrorMessage('Correlation for the data passed contains NaN values, which will break the correlation analysis. This may be due to features with 0 variance, which will for some reason return NaN')
         else:
-            _TargetCorrelations = corr.ix[-1][:-1]
+            _TargetCorrelations = corr.iloc[-1][:-1]
             # propheticus.shared.Utils.printStatusMessage('Features correlation with target')
             TargetCorrelations = _TargetCorrelations[abs(_TargetCorrelations).argsort()[::-1]]
 
-            _Indexes = numpy.argwhere(abs(TargetCorrelations) > Config.max_alert_target_correlation)
+            _Indexes = numpy.where(abs(TargetCorrelations) > Config.max_alert_target_correlation)[0]
             _Correlations = {str(index): str(round(val, 2)) for index, val in TargetCorrelations.items()}  # For some reason directly getting the value sometimes returns series with 2 values instead of direct correlation error
             if len(_Indexes) > 0:
                 HighCorrelations = []
                 for index in _Indexes:
-                    HighCorrelations.append(str(round(TargetCorrelations[index], 2).to_dict()))
+                    HighCorrelations.append(str(round(TargetCorrelations[index], 2)))
                 propheticus.shared.Utils.printWarningMessage('Some features have correlations with target too high: \n' + ', '.join(sorted(HighCorrelations)))
 
             # print(TargetCorrelations)
@@ -177,13 +178,25 @@ class DataAnalysis(object):
 
         plt.title('Features Distribution', fontsize=14)
 
-        ax.set_xticklabels(ax.xaxis.get_majorticklabels(), rotation=40)
+        if len(Headers) < 50:
+            ax.set_xticklabels(ax.xaxis.get_majorticklabels(), rotation=40)
+            # plt.xticks(numpy.arange(len(df.index.values)), df.index.values, rotation=40)
+        else:
+            propheticus.shared.Utils.printNoticeMessage(f'Hiding boxplot feature labels due to excessive number: {len(df.index.values)}')
+
         plt.subplots_adjust(bottom=0.25)
 
-        if Config.publication_format is False:
-            plt.figtext(.02, .02, self.description, size='xx-small')
+        if Config.publication_format is False or Config.force_configurations_log is True:
+            if Config.force_configurations_log is True:
+                plt.annotate(self.description, (0, 0), (0, -40), xycoords='axes fraction', textcoords='offset points', va='top')
+            else:
+                plt.figtext(.02, .02, self.description, size='xx-small')
 
-        propheticus.shared.Utils.saveImage(self.save_items_path, self.configurations_id + ".data_analysis_boxplot.png")
+        propheticus.shared.Utils.saveImage(
+            self.save_items_path, self.configurations_id + ".data_analysis_boxplot.png",
+            bbox_inches="tight",
+            dpi=150
+        )
 
         if self.display_visuals is True:
             propheticus.shared.Utils.showImage()
@@ -205,6 +218,7 @@ class DataAnalysis(object):
         -------
 
         """
+        # plt.rcParams.update({'font.size': 12})
         propheticus.shared.Utils.printStatusMessage('Generating Class Distribution Plot')
 
         Target = Dataset['targets']
@@ -232,10 +246,13 @@ class DataAnalysis(object):
         # plt.suptitle(('Class Distribution'), fontsize=14, fontweight='bold')
         plt.title('Class Distribution', fontsize=14)
 
-        if Config.publication_format is False:
-            plt.figtext(.02, .02, self.description, size='xx-small')
+        if Config.publication_format is False or Config.force_configurations_log is True:
+            if Config.force_configurations_log is True:
+                plt.annotate(self.description, (0, 0), (0, -40), xycoords='axes fraction', textcoords='offset points', va='top')
+            else:
+                plt.figtext(.02, .02, self.description, size='xx-small')
 
-        propheticus.shared.Utils.saveImage(self.save_items_path, self.configurations_id + ".data_analysis_class_distribution.png")
+        propheticus.shared.Utils.saveImage(self.save_items_path, self.configurations_id + ".data_analysis_class_distribution.png", dpi=150)
 
         if self.display_visuals is True:
             propheticus.shared.Utils.showImage()
@@ -287,8 +304,11 @@ class DataAnalysis(object):
         # plt.suptitle(("Scatter Plot and Correlation: " + dataset_name), fontsize=14, fontweight='bold')
         # plt.suptitle(("Scatter Plot and Correlation"), fontsize=14, fontweight='bold')
 
-        if Config.publication_format is False:
-            plt.figtext(.02, .02, self.description, size='xx-small')
+        if Config.publication_format is False or Config.force_configurations_log is True:
+            if Config.force_configurations_log is True:
+                plt.annotate(self.description, (0, 0), (0, -40), xycoords='axes fraction', textcoords='offset points', va='top')
+            else:
+                plt.figtext(.02, .02, self.description, size='xx-small')
 
         propheticus.shared.Utils.saveImage(self.save_items_path, self.configurations_id + ".data_analysis_scatter_plot.png")
 
@@ -325,11 +345,11 @@ class DataAnalysis(object):
         # corr = df.corr().as_matrix()
         corr = df.corr()
 
-        corr_with_target = corr.ix[-1][:-1]
-        # attributes sorted from the most propheticus
+        corr_with_target = corr.iloc[-1][:-1]
+        # attributes sorted from the most predictive
         # propheticus.shared.Utils.printStatusMessage('Features correlation with target')
 
-        # print(corr)
+        corr.to_csv(os.path.join(self.save_items_path, self.configurations_id + '.heat_map.correlation.csv'), sep='|')
 
         mask = numpy.zeros_like(corr, dtype=numpy.bool)
         mask[numpy.triu_indices_from(mask)] = True
@@ -350,17 +370,21 @@ class DataAnalysis(object):
             vmin=-1,
             center=0,
             square=True,
-            linewidths=.5,
-            cbar_kws={"shrink": .5},
-            xticklabels=True,
-            yticklabels=True
+            # linewidths=.5,
+            cbar_kws={"shrink": .2},
+            xticklabels=False,
+            yticklabels=False
         )
 
-
-        if Config.publication_format is False:
-            plt.figtext(.02, .02, self.description, size='xx-small')
+        # if Config.publication_format is False or Config.force_configurations_log is True:
+        #     if Config.force_configurations_log is True:
+        #         plt.annotate(self.description, (0, 0), (0, -40), xycoords='axes fraction', textcoords='offset points', va='top')
+        #     else:
+        #         plt.figtext(.02, .02, self.description, size='xx-small')
 
         plt.title('Correlation Heat Map', fontsize=14)
+        plt.ylabel("Features")
+        plt.xlabel('Features')
 
         plt.yticks(rotation=0)
         # print(axes.get_xticklabels())
@@ -368,7 +392,7 @@ class DataAnalysis(object):
 
         # ax.yaxis.label.set_rotation(25)
 
-        propheticus.shared.Utils.saveImage(self.save_items_path, self.configurations_id + ".data_analysis_correlation_plot.png")
+        propheticus.shared.Utils.saveImage(self.save_items_path, self.configurations_id + ".data_analysis_correlation_plot.png", dpi=500)
 
         if self.display_visuals is True:
             propheticus.shared.Utils.showImage()
@@ -378,7 +402,7 @@ class DataAnalysis(object):
     '''
     Time series analysis
     '''
-    def timeSeriesStd(self, Dataset):
+    def seriesValuesByClassStd(self, Dataset):
         """
         Performs the time series analysis
 
@@ -390,11 +414,12 @@ class DataAnalysis(object):
         -------
 
         """
-        self.timeSeries(Dataset, True)
+        self.seriesValuesByClass(Dataset, True)
+
     '''
     Time series analysis
     '''
-    def timeSeries(self, Dataset, std=False):
+    def seriesValuesByClass(self, Dataset, std=False):
         """
         Plots the time series analysis corresponding to the dataset
 
@@ -408,11 +433,11 @@ class DataAnalysis(object):
         -------
 
         """
-        propheticus.shared.Utils.printStatusMessage('Generating Class Timeseries Plot')
+        propheticus.shared.Utils.printStatusMessage('Generating Class seriesValuesByClass Plot')
 
         Headers = Dataset['headers']
         if Headers[0] != 'Index':
-            propheticus.shared.Utils.printErrorMessage('The index of the run sample is not present. To draw a timeseries this is required')
+            propheticus.shared.Utils.printErrorMessage('The index of the run sample is not present. To draw a seriesValuesByClass this is required')
             return
         elif len(Headers) == 1:
             propheticus.shared.Utils.printErrorMessage('Only the index feature is present. At least one more is required. Other selected features may have been removed when exporting.')
@@ -440,8 +465,11 @@ class DataAnalysis(object):
         # plt.figure(figure_index)
         fig, axes = plt.subplots(nrows=nrows, ncols=ncols)
 
-        if Config.publication_format is False:
-            plt.figtext(.02, .02, self.description, size='xx-small')
+        if Config.publication_format is False or Config.force_configurations_log is True:
+            if Config.force_configurations_log is True:
+                plt.annotate(self.description, (0, 0), (0, -40), xycoords='axes fraction', textcoords='offset points', va='top')
+            else:
+                plt.figtext(.02, .02, self.description, size='xx-small')
 
         # plt.get_current_fig_manager().window.showMaximized()  # NOTE: this forces plot to showup fullscreen
 
@@ -533,7 +561,7 @@ class DataAnalysis(object):
             if img_row + 1 == nrows and not img_count % ncols and (img_count + 1) < len(Iterator):
                 propheticus.shared.Utils.saveImage(
                     self.save_items_path,
-                    self.configurations_id + '.' + str(figure_index) + ".data_analysis_timeseries.png",
+                    self.configurations_id + '.' + str(figure_index) + ".data_analysis_seriesValuesByClass.png",
                     additional_artists=[lgd]
                 )
 
@@ -542,13 +570,186 @@ class DataAnalysis(object):
                 # plt.figure(figure_index)
                 fig, axes = plt.subplots(nrows=nrows, ncols=ncols)
 
-                if Config.publication_format is False:
-                    plt.figtext(.02, .02, self.description, size='xx-small')
+                if Config.publication_format is False or Config.force_configurations_log is True:
+                    if Config.force_configurations_log is True:
+                        plt.annotate(self.description, (0, 0), (0, -40), xycoords='axes fraction', textcoords='offset points', va='top')
+                    else:
+                        plt.figtext(.02, .02, self.description, size='xx-small')
 
         propheticus.shared.Utils.saveImage(
             self.save_items_path,
-            self.configurations_id + '.' + str(figure_index) + '.' + str(int(std)) + ".data_analysis_timeseries.png",
+            self.configurations_id + '.' + str(figure_index) + '.' + str(int(std)) + ".data_analysis_seriesValuesByClass.png",
             additional_artists=[lgd]
+        )
+
+        if self.display_visuals is True:
+            propheticus.shared.Utils.showImage()
+
+        plt.close()
+
+
+    '''
+    Time series analysis
+    '''
+    def seriesClassByRun(self, Dataset, std=False):
+        """
+        Plots the time series class corresponding to the runs
+
+        Parameters
+        ----------
+        Dataset : dict
+        std : bool, optional
+            The default is False
+
+        Returns
+        -------
+
+        """
+
+        # NOTE: if you're not seeing all the labels it's possible they are being removed along invalid samples regarding the selected target (e.g., Remove DeltaTL)
+        propheticus.shared.Utils.printStatusMessage('Generating seriesClassByRun Plot')
+
+        Headers = Dataset['headers']
+        if Headers[0] != 'Index':
+            propheticus.shared.Utils.printErrorMessage('The index of the run sample is not present. To draw a seriesClassByRun this is required')
+            return
+        elif len(Headers) == 1:
+            propheticus.shared.Utils.printErrorMessage('Only the index feature is present. At least one more is required. Other selected features may have been removed when exporting.')
+            return
+
+        Descriptions = Dataset['descriptions']
+        Data = Dataset['data']
+        Target = Dataset['targets']
+
+        baseline_description = propheticus.shared.Utils.getClassDescriptionById(Config.ClassesMapping['Baseline'])
+        ClassByRun = {}
+        DataByRun = {}
+        for index, Item in enumerate(Data):
+            run = Descriptions[index]
+            target_class = Target[index]
+
+            if run not in ClassByRun or target_class != baseline_description:
+                ClassByRun[run] = target_class
+
+            if run not in DataByRun:
+                DataByRun[run] = []
+            DataByRun[run].append(Item)
+
+        for run, target_class in ClassByRun.items():
+            if target_class == baseline_description:
+                del DataByRun[run]  # NOTE: display only failure runs
+
+        Iterator = range(0, len(DataByRun))
+
+        ncols = 2
+        nrows = 20
+        if ncols > len(Iterator):
+            ncols = len(Iterator)
+            nrows = 1
+        elif nrows > math.ceil(len(Iterator) / ncols):
+            nrows = math.ceil(len(Iterator) / ncols)
+
+        img_row = -1
+        figure_index = 1
+        # plt.figure(figure_index)
+        subplot_width = 12.8
+        subplot_height = 9.6
+        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(subplot_width, subplot_height))  #
+
+        # if Config.publication_format is False or Config.force_configurations_log is True:
+        #     if Config.force_configurations_log is True:
+        #         plt.annotate(self.description, (0, 0), (0, -40), xycoords='axes fraction', textcoords='offset points', va='top')
+        #     else:
+        #         plt.figtext(.02, .02, self.description, size='xx-small')
+
+        # plt.get_current_fig_manager().window.showMaximized()  # NOTE: this forces plot to showup fullscreen
+
+        file_path = os.path.join(Config.OS_PATH, self.save_items_path)
+        pathlib.Path(file_path).mkdir(parents=True, exist_ok=True)
+
+        # TODO: analyze possible optimizations
+        # TODO: meter aqui uma nota que isto n se deve usar c normalizacao, senao os valores dos indices tb ficam normalizados
+        # TODO: if sliding window > 1 it makes no sense
+
+        img_count = 0
+        for run, RunData in DataByRun.items():
+            img_count += 1
+
+            DataByFeatures = {}
+            for Item in RunData:
+                record_index = Item[0]
+
+                for feature_index in range(1, len(Headers)):
+                    if feature_index not in DataByFeatures:
+                        DataByFeatures[feature_index] = {}
+
+                    DataByFeatures[feature_index][record_index] = Item[feature_index]
+
+            DataFrameData = []
+            for feature_index, Series in DataByFeatures.items():
+                SortedSeries = collections.OrderedDict(sorted(Series.items()))
+                DataFrameData.append(SortedSeries.values())
+
+            DataFrameData = list(itertools.zip_longest(*DataFrameData))  # NOTE: this handles multiple lenght sublists; replaces non-existing numbers with None, which do not appear in the plot
+            df = pandas.DataFrame(DataFrameData, index=[i for i in range(len(DataFrameData))], columns=Headers[1:])
+            plt.xticks(numpy.arange(len(df.index.values) + 1, step=10), rotation=40)
+            plt.ylabel("Features Values (normalized)")
+            plt.xlabel('Time')
+
+            plt.xlim([0, max(df.index.values)])
+            # plt.ylim([0, y_max])
+
+            color = ["#" + propheticus.shared.Utils.ColourValues[i % len(propheticus.shared.Utils.ColourValues)] for i in range(len(Headers[1:]))]
+
+            _feature_index = img_count - 1
+            img_row += 1 if not _feature_index % ncols else 0
+            if nrows == 1 and ncols == 1:
+                _ax = axes
+            else:
+                _ax = axes[img_row, _feature_index % ncols] if nrows > 1 else axes[_feature_index % ncols]
+
+            ax = df.plot(ax=_ax, color=color, legend=False)
+
+            # plt.xticks(numpy.arange(len(df.index.values)), df.index.values, rotation=40)
+
+            #ax.legend(bbox_to_anchor=(1.25, 1.02))
+            #ax.set_xticklabels(df.index.values)
+            # plt.subplots_adjust(right=0.81, bottom=0.2)
+
+            # plt.suptitle(('Features Means By Class: ' + dataset_name), fontsize=14, fontweight='bold')
+            ax.set_title(run, fontsize=10)
+
+            # LengendFont = matplotlib.font_manager.FontProperties()
+            # LengendFont.set_size('small')
+            # # lgd = ax.legend(loc=9, bbox_to_anchor=(0.5, -0.1), prop=LengendFont)
+            # lgd = ax.legend(prop=LengendFont)
+
+            if img_row + 1 == nrows and not img_count % ncols and (img_count + 1) < len(Iterator):
+                fig.tight_layout()
+                propheticus.shared.Utils.saveImage(
+                    self.save_items_path,
+                    self.configurations_id + '.' + str(figure_index) + ".data_analysis_seriesValuesByClass.png",
+                    bbox_inches='tight',
+                    # additional_artists=[lgd]
+                )
+
+                img_row = -1
+                figure_index += 1
+                # plt.figure(figure_index)
+                fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(subplot_width, subplot_height))
+
+                if Config.publication_format is False or Config.force_configurations_log is True:
+                    if Config.force_configurations_log is True:
+                        plt.annotate(self.description, (0, 0), (0, -40), xycoords='axes fraction', textcoords='offset points', va='top')
+                    else:
+                        plt.figtext(.02, .02, self.description, size='xx-small')
+        fig.tight_layout()
+        propheticus.shared.Utils.saveImage(
+            self.save_items_path,
+            self.configurations_id + '.' + str(figure_index) + '.' + str(int(std)) + ".data_analysis_seriesValuesByClass.png",
+            bbox_inches='tight',
+            # dpi=2000,
+            # additional_artists=[lgd]
         )
 
         if self.display_visuals is True:
@@ -592,6 +793,7 @@ class DataAnalysis(object):
         -------
 
         """
+        # plt.rcParams.update({'font.size': 12})
         propheticus.shared.Utils.printStatusMessage('Generating Class Features Line Plot')
 
         Headers = Dataset['headers']
@@ -632,11 +834,17 @@ class DataAnalysis(object):
         else:
             ax = df.plot(style=styles, color=color)
 
-        plt.xticks(numpy.arange(len(df.index.values)), df.index.values, rotation=40)
+        if len(df.index.values) < 50:
+            plt.xticks(numpy.arange(len(df.index.values)), df.index.values, rotation=40)
+        else:
+            propheticus.shared.Utils.printNoticeMessage(f'Hiding line graphs feature labels due to excessive number: {len(df.index.values)}')
 
         #ax.legend(bbox_to_anchor=(1.25, 1.02))
         #ax.set_xticklabels(df.index.values)
         plt.subplots_adjust(right=0.81, bottom=0.2)
+
+        plt.ylabel('Value', rotation=90)
+        plt.xlabel('Features')
 
         # plt.suptitle(('Features Means By Class: ' + dataset_name), fontsize=14, fontweight='bold')
         # plt.suptitle(('Features Means By Class'), fontsize=14, fontweight='bold')
@@ -647,15 +855,20 @@ class DataAnalysis(object):
         # lgd = ax.legend(loc=9, bbox_to_anchor=(0.5, -0.1), prop=LengendFont)
         lgd = ax.legend(prop=LengendFont)
 
-        if Config.publication_format is False:
-            plt.figtext(.02, .02, self.description, size='xx-small')
+        if Config.publication_format is False or Config.force_configurations_log is True:
+            if Config.force_configurations_log is True:
+                plt.annotate(self.description, (0, 0), (0, -40), xycoords='axes fraction', textcoords='offset points', va='top')
+            else:
+                plt.figtext(.02, .02, self.description, size='xx-small')
 
         # plt.savefig(file_path + "/" + self.configurations_id + '.' + str(int(std)) + ".data_analysis_line_graphs.png", additional_artists=[lgd])  # TODO: estava , bbox_inches="tight"
 
         propheticus.shared.Utils.saveImage(
             self.save_items_path,
             self.configurations_id + '.' + str(int(std)) + ".data_analysis_line_graphs.png",
-            additional_artists=[lgd]
+            additional_artists=[lgd],
+            bbox_inches="tight",
+            dpi=150
         )
 
         if self.display_visuals is True:
@@ -687,7 +900,7 @@ class DataAnalysis(object):
 
         df = pandas.DataFrame(Data, columns=Headers)
         df['classes'] = Target
-        ax = pandas.tools.plotting.parallel_coordinates(df, 'classes')
+        ax = pandas.plotting.parallel_coordinates(df, 'classes')
         # plt.suptitle(('Parallel Composition: ' + dataset_name), fontsize=14, fontweight='bold')
 
         #ax.legend(bbox_to_anchor=(1.25, 1.02))
@@ -698,8 +911,11 @@ class DataAnalysis(object):
         LengendFont.set_size('small')
         lgd = ax.legend(loc=9, bbox_to_anchor=(0.5, -0.1), prop=LengendFont)
 
-        if Config.publication_format is False:
-            plt.figtext(.02, .02, self.description, size='xx-small')
+        if Config.publication_format is False or Config.force_configurations_log is True:
+            if Config.force_configurations_log is True:
+                plt.annotate(self.description, (0, 0), (0, -40), xycoords='axes fraction', textcoords='offset points', va='top')
+            else:
+                plt.figtext(.02, .02, self.description, size='xx-small')
 
         propheticus.shared.Utils.saveImage(
             self.save_items_path,

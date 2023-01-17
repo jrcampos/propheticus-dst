@@ -4,7 +4,8 @@ class Sampling(object):
     oversampling_ratio = 3
     undersampling_maj_to_min_ratio = 1
     SamplingCallDetails = {
-        # OVERSAMPLING
+        # OVERSAMPLING  # NOTE: leave oversampling defined first; this will be used as "default" order (oversamp. then undersamp.)
+
         'SMOTE': {
             'package': 'imblearn.over_sampling',
             'callable': 'SMOTE',
@@ -18,18 +19,18 @@ class Sampling(object):
                 'propheticus_order': {'type': 'int'}
             }
         },
-        # TODO: REVIEW FOLLOWING TECHNIQUE; WAS NOT OVERSAMPLING AS CONFIGURED
-        # 'ADASYN': {
-        #     'package': 'imblearn.over_sampling',
-        #     'callable': 'ADASYN',
-        #     'type': 'oversampling',
-        #     'parameters': {
-        #         'sampling_strategy': {'type': ''},
-        #         'n_neighbors': {'type': ''},
-        #         'n_jobs': {'type': ''},
-        #         'random_state': {'hide': True, 'type': ''}
-        #     ]
-        # },
+        'ADASYN': {
+            'package': 'imblearn.over_sampling',
+            'callable': 'ADASYN',
+            'type': 'oversampling',
+            'parameters': {
+                'sampling_strategy': {'type': ''},
+                'n_neighbors': {'type': ''},
+                'n_jobs': {'type': ''},
+                'propheticus_ratio': {'type': 'int', 'default': oversampling_ratio},
+                'random_state': {'hide': True, 'type': ''}
+            }
+        },
         'SMOTEENN': {
             'package': 'imblearn.combine',
             'callable': 'SMOTEENN',
@@ -37,7 +38,8 @@ class Sampling(object):
             'parameters': {
                 'sampling_strategy': {'type': ''},
                 'random_state': {'hide': True, 'type': ''},
-                'propheticus_ratio': {'type': '', 'default': oversampling_ratio},
+                'n_jobs': {'type': '', 'default': -1},
+                # 'propheticus_ratio': {'type': '', 'default': oversampling_ratio},
                 'propheticus_order': {'type': ''}
             }
         },
@@ -87,9 +89,22 @@ class Sampling(object):
                 'return_indices': {'type': ''},
                 'n_neighbors': {'type': ''},
                 'n_seeds': {'type': ''},
-                'n_jobs': {'type': ''},
+                'n_jobs': {'type': '', 'default': -1},
                 'random_state': {'hide': True, 'type': ''},
-                'propheticus_ratio': {'type': '', 'default': undersampling_maj_to_min_ratio},
+                # 'propheticus_ratio': {'type': '', 'default': undersampling_maj_to_min_ratio},
+                'propheticus_order': {'type': ''}
+            }
+        },
+        'ClusterCentroids': {
+            'package': 'imblearn.under_sampling',
+            'callable': 'ClusterCentroids',
+            'type': 'undersampling',
+            'parameters': {
+                'sampling_strategy': {'type': ''},
+                'voting': {'type': ''},
+                'n_jobs': {'type': '', 'default': -1},
+                # 'random_state': {'hide': True, 'type': ''},
+                # 'propheticus_ratio': {'type': '', 'default': undersampling_maj_to_min_ratio},
                 'propheticus_order': {'type': ''}
             }
         },
@@ -102,9 +117,9 @@ class Sampling(object):
                 'return_indices': {'type': ''},
                 'n_neighbors': {'type': ''},
                 'kind_sel': {'type': ''},
-                'n_jobs': {'type': ''},
-                'random_state': {'hide': True, 'type': ''},
-                'propheticus_ratio': {'type': '', 'default': undersampling_maj_to_min_ratio},
+                'n_jobs': {'type': '', 'default': -1},
+                # 'random_state': {'hide': True, 'type': ''},
+                # 'propheticus_ratio': {'type': '', 'default': undersampling_maj_to_min_ratio},
                 'propheticus_order': {'type': ''}
             }
         },
@@ -118,9 +133,9 @@ class Sampling(object):
                 'n_neighbors': {'type': ''},
                 'max_iter': {'type': ''},
                 'kind_sel': {'type': ''},
-                'n_jobs': {'type': ''},
-                'random_state': {'hide': True, 'type': ''},
-                'propheticus_ratio': {'type': '', 'default': undersampling_maj_to_min_ratio},
+                'n_jobs': {'type': '', 'default': -1},
+                # 'random_state': {'hide': True, 'type': ''},
+                # 'propheticus_ratio': {'type': '', 'default': undersampling_maj_to_min_ratio},
                 'propheticus_order': {'type': ''}
             }
         },
@@ -134,9 +149,9 @@ class Sampling(object):
                 'n_neighbors': {'type': ''},
                 'allow_minority': {'type': ''},
                 'kind_sel': {'type': ''},
-                'n_jobs': {'type': ''},
-                'random_state': {'hide': True, 'type': ''},
-                'propheticus_ratio': {'type': '', 'default': undersampling_maj_to_min_ratio},
+                'n_jobs': {'type': '', 'default': -1},
+                # 'random_state': {'hide': True, 'type': ''},
+                # 'propheticus_ratio': {'type': '', 'default': undersampling_maj_to_min_ratio},
                 'propheticus_order': {'type': ''}
             }
         },
@@ -149,7 +164,7 @@ class Sampling(object):
                 'sampling_strategy': {'type': ''},
                 'return_indices': {'type': ''},
                 'cv': {'type': ''},
-                'n_jobs': {'type': ''},
+                'n_jobs': {'type': '', 'default': -1},
                 'random_state': {'hide': True, 'type': ''},
                 'propheticus_ratio': {'type': '', 'default': undersampling_maj_to_min_ratio},
                 'propheticus_order': {'type': ''}
@@ -165,8 +180,7 @@ class Sampling(object):
                 'version': {'type': ''},
                 'n_neighbors': {'type': ''},
                 'n_neighbors_ver3': {'type': ''},
-                'n_jobs': {'type': ''},
-                'random_state': {'hide': True, 'type': ''},
+                'n_jobs': {'type': '', 'default': -1},
                 'propheticus_ratio': {'type': '', 'default': undersampling_maj_to_min_ratio},
                 'propheticus_order': {'type': ''}
             }
@@ -180,9 +194,7 @@ class Sampling(object):
                 'return_indices': {'type': ''},
                 'n_neighbors': {'type': ''},
                 'threshold_cleaning': {'type': ''},
-                'n_jobs': {'type': ''},
-                'random_state': {'hide': True, 'type': ''},
-                'propheticus_ratio': {'type': '', 'default': undersampling_maj_to_min_ratio},
+                'n_jobs': {'type': '', 'default': -1},
                 'propheticus_order': {'type': ''}
             }
         },
@@ -195,9 +207,8 @@ class Sampling(object):
                 'return_indices': {'type': ''},
                 'n_neighbors': {'type': ''},
                 'n_seeds': {'type': ''},
-                'n_jobs': {'type': ''},
+                'n_jobs': {'type': '', 'default': -1},
                 'random_state': {'hide': True, 'type': ''},
-                'propheticus_ratio': {'type': '', 'default': undersampling_maj_to_min_ratio},
                 'propheticus_order': {'type': ''}
             }
         },
@@ -208,9 +219,7 @@ class Sampling(object):
             'parameters': {
                 'sampling_strategy': {'type': ''},
                 'return_indices': {'type': ''},
-                'n_jobs': {'type': ''},
-                'random_state': {'hide': True, 'type': ''},
-                'propheticus_ratio': {'type': '', 'default': undersampling_maj_to_min_ratio},
+                'n_jobs': {'type': '', 'default': -1},
                 'propheticus_order': {'type': ''}
             }
         },

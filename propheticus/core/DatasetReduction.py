@@ -7,6 +7,7 @@ import copy
 import numpy
 import math
 import os
+import collections
 
 import propheticus
 import propheticus.shared
@@ -205,11 +206,22 @@ class DatasetReduction(object):
         Target : list of str
         """
 
-        Estimators = DatasetReduction.buildDataBalancingTransformers(method, Parameters, Target, seed)
-        for data_sampling_method, Estimator in Estimators.items():
-            Data, Target = Estimator.fit_sample(Data, Target)
+        import sklearn.preprocessing
+        label_encoder = sklearn.preprocessing.LabelEncoder()
+        Encoded_Target = label_encoder.fit_transform(Target)
 
-        return Data, Target
+        Estimators = DatasetReduction.buildDataBalancingTransformers(method, Parameters, Encoded_Target, seed)
+        for data_sampling_method, Estimator in Estimators.items():
+            # print()
+            # print(data_sampling_method)
+            # print(sorted(collections.Counter(Encoded_Target).items()))
+
+            Data, Encoded_Target = Estimator.fit_resample(Data, Encoded_Target)
+            # print(sorted(collections.Counter(Encoded_Target).items()))
+
+        Target = label_encoder.inverse_transform(Encoded_Target)
+
+        return Data, Target, Estimators
 
     @staticmethod
     def buildDataBalancingTransformers(method, Parameters, Target, seed, grid_search_cv_count=None):
@@ -225,7 +237,11 @@ class DatasetReduction(object):
         OrderedTechniques = {}
         for _method in method:
             if _method in Parameters and 'propheticus_order' in Parameters[_method]:
-                OrderedTechniques[_method] = Parameters[_method]['propheticus_order']
+                target_order = Parameters[_method]['propheticus_order']
+                if target_order in OrderedTechniques.values():
+                    propheticus.shared.Utils.printFatalMessage(f'Order {target_order} already defined! {Parameters}')
+
+                OrderedTechniques[_method] = target_order
 
         MethodsOrder = sorted(OrderedTechniques, key=OrderedTechniques.get)
         MethodsOrder += [_method for _method in Config.SamplingCallDetails.keys() if _method in method and _method not in MethodsOrder]
@@ -237,28 +253,40 @@ class DatasetReduction(object):
             CallDetails = copy.deepcopy(Config.SamplingCallDetails[sampling_method])
             CallArguments = copy.deepcopy(Parameters[sampling_method]) if sampling_method in Parameters else {}
 
-            propheticus_ratio = CallArguments['propheticus_ratio'] if 'propheticus_ratio' in CallArguments else CallDetails['parameters']['propheticus_ratio']['default']
             if Config.thread_level_ == propheticus.shared.Utils.THREAD_LEVEL_ALGORITHM and 'n_jobs' in CallDetails['parameters']:
                 CallArguments['n_jobs'] = -1
 
-            if CallDetails['type'] == 'oversampling':
-                high_majority_target = max(DistributionByClass.items(), key=operator.itemgetter(1))[0]
-                DistributionByClass = OversamplingRatio = {target: (int(propheticus_ratio * count) if target != high_majority_target else count) for target, count in DistributionByClass.items()}
-                CallArguments['sampling_strategy'] = OversamplingRatio
+            # if 'n_jobs' in CallDetails['parameters']:
+            #     CallArguments['n_jobs'] = 48  # TODO: REMOVE!!
 
-            elif CallDetails['type'] == 'undersampling':
-                high_majority_target = max(DistributionByClass.items(), key=operator.itemgetter(1))[0]
-                second_high_majority_count = sorted(DistributionByClass.items(), key=operator.itemgetter(1), reverse=True)[1][1]
-                UndersamplingRatio = {target: (int(propheticus_ratio * second_high_majority_count) if target == high_majority_target else count) for target, count in DistributionByClass.items()}
-                for target, count in UndersamplingRatio.items():
-                    if count > DistributionByClass[target]:
-                        propheticus.shared.Utils.printFatalMessage(f'There are not enough samples to apply the chosen ratio ({propheticus_ratio}); original: {DistributionByClass[target]}, requested: {count}')
+            if 'propheticus_ratio' in CallArguments and 'propheticus_ratio' not in CallDetails['parameters']:
+                propheticus.shared.Utils.printFatalMessage(f'Using propheticus_ratio in sampling methods but it was not defined for {sampling_method}')
 
-                DistributionByClass = UndersamplingRatio
-                CallArguments['sampling_strategy'] = UndersamplingRatio
+            if 'propheticus_ratio' in CallDetails['parameters'] and 'sampling_strategy' not in CallArguments:
+                propheticus_ratio = CallArguments['propheticus_ratio'] if 'propheticus_ratio' in CallArguments else CallDetails['parameters']['propheticus_ratio']['default']
+                if 'sampling_strategy' in CallArguments:
+                    propheticus.shared.Utils.printFatalMessage(f'Using propheticus_ratio in sampling methods will overwrite sampling_strategy argument: {CallArguments["sampling_strategy"]}')
 
-            else:
-                propheticus.shared.Utils.printFatalMessage('Invalid data balancing type: ' + CallDetails['type'])
+                if CallDetails['type'] == 'oversampling':
+                    high_majority_target = max(DistributionByClass.items(), key=operator.itemgetter(1))[0]
+                    DistributionByClass = OversamplingRatio = {target: (int(propheticus_ratio * count) if target != high_majority_target else count) for target, count in DistributionByClass.items()}
+
+                    # print(OversamplingRatio)
+                    CallArguments['sampling_strategy'] = OversamplingRatio
+
+                elif CallDetails['type'] == 'undersampling':
+                    high_majority_target = max(DistributionByClass.items(), key=operator.itemgetter(1))[0]
+                    second_high_majority_count = sorted(DistributionByClass.items(), key=operator.itemgetter(1), reverse=True)[1][1]
+                    UndersamplingRatio = {target: (int(propheticus_ratio * second_high_majority_count) if target == high_majority_target else count) for target, count in DistributionByClass.items()}
+                    for target, count in UndersamplingRatio.items():
+                        if count > DistributionByClass[target]:
+                            propheticus.shared.Utils.printFatalMessage(f'There are not enough samples to apply the chosen ratio ({propheticus_ratio}); original: {DistributionByClass[target]}, requested: {count}')
+
+                    DistributionByClass = UndersamplingRatio
+                    CallArguments['sampling_strategy'] = UndersamplingRatio
+
+                else:
+                    propheticus.shared.Utils.printFatalMessage('Invalid data balancing type: ' + CallDetails['type'])
 
             if 'propheticus_ratio' in CallDetails['parameters']:
                 del CallDetails['parameters']['propheticus_ratio']

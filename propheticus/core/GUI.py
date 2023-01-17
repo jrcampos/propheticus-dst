@@ -39,6 +39,7 @@ if Config.demonstration_mode is True and not propheticus.shared.Utils.isMultiPro
 numpy.random.seed(propheticus.shared.Utils.RandomSeeds[0])
 random.seed(propheticus.shared.Utils.RandomSeeds[0])
 
+
 # TODO: should allow the system to work with unsupervised problems
 class GUI(object):
     def __init__(self):
@@ -55,7 +56,7 @@ class GUI(object):
         self.initializeDatasetsConfigurations()
         self.initializeHelpMessages()
 
-        self.oDataManagement = propheticus.core.DataManagement(self.mode)
+        self.oDataManagement = propheticus.core.DataManagement(self)
 
     def quit(self, choice):
         if Config.demonstration_mode is True:
@@ -92,12 +93,21 @@ class GUI(object):
         self.clearDataCache()
 
     def initializeDatasetsConfigurations(self):
-        # TODO: these preset values should go to the Config.InitialConfigurations, to allow its direct use in Util.s
+        # TODO: these preset values should go to the Config.InitialConfigurations, to allow its direct use in Utils
         self.DatasetsConfigurations = {
+            'config_truncate_configurations': True,
             'config_binary_classification': False,
+            'config_save_complete_model': False,
+            'config_save_experiment_models': False,
+            'config_load_experiment_models': None,
+            'config_ensemble_algorithms': None,
+            'config_ensemble_algorithms_parameters': {},
+            'config_ensemble_selection': None,
+            'config_ensemble_selection_parameters': None,
             # 'config_seed_count': 30,  # NOTE: FROM InitialConfigurations
-            # 'config_cv_fold': 10,
-            'config_grid_search': False,
+            # 'config_grid_search': False,
+            'config_data_split': 'stratified_cross_validation',
+            'config_data_split_parameters': {},
             'config_grid_inner_cv_fold': 3,
             'config_sequential_data': False,
             'config_sliding_window': 1,
@@ -107,6 +117,7 @@ class GUI(object):
 
             'datasets_exclude_classes': [],
             'datasets_exclude_run_classes': [],
+            'datasets_classes_remap': [],
             'datasets_positive_classes': [],
 
             'pre_excluded_features_static': [],
@@ -129,15 +140,31 @@ class GUI(object):
                 self.DatasetsConfigurations[config] = value
 
         self.DatasetsStaticConfigs = {
+            'config_truncate_configurations': {
+                'label': 'Truncate Configurations',
+                'type': bool,
+                'default': True
+            },
             'config_binary_classification': {
                 'label': 'Binary Classification',
                 'type': bool,
                 'reset_cache': True
             },
-            'config_cv_fold': {
-                'label': 'Outer cross-validation folds',
-                'type': int,
-                'min': 2
+            'config_save_complete_model': {
+                'label': 'Save Trained Model on Complete Dataset to File',
+                'type': bool,
+            },
+            'config_save_experiment_models': {
+                'label': 'Save Trained Run/Seed Models to File',
+                'type': bool,
+            },
+            'config_load_experiment_models': {
+                'label': 'Use Saved Trained Run/Seed Models from File',
+                'type': 'items',
+                'values': propheticus.shared.Utils.getPersistedModelsExperimentsList(),
+                'default': None,
+                'allow_empty': True,
+                'callback': self.parseDefineLoadExperimentModels
             },
             'config_grid_inner_cv_fold': {
                 'label': 'Inner cross-validation folds (grid-search)',
@@ -177,6 +204,29 @@ class GUI(object):
                 'label': 'Normalize data',
                 'type': bool,
                 'reset_cache': True
+            },
+            'config_data_split': {
+                'label': 'Data split method',
+                'type': 'item',
+                'values': list(Config.ClassificationDataSplit.keys()),
+                'allow_empty': False,
+                'callback': self.parseDefineDatSplitChoice
+            },
+            'config_ensemble_algorithms': {
+                'label': 'Ensemble Classification Algorithms Results',
+                'type': 'item',
+                'values': list(Config.ClassificationEnsembles.keys()),
+                'default': None,
+                'allow_empty': True,
+                'callback': self.parseDefineEnsembleConfigurationChoice
+            },
+            'config_ensemble_selection': {
+                'label': 'Ensemble Selection Heuristic',
+                'type': 'item',
+                'values': list(Config.ClassificationEnsemblesSelection.keys()),
+                'default': None,
+                'allow_empty': True,
+                'callback': self.parseDefineEnsembleSelectionChoice
             }
         }
 
@@ -188,13 +238,36 @@ class GUI(object):
                 # TODO: improve validation of client defined configs
                 self.DatasetsStaticConfigs[config] = value
 
-
         self.initializeDatasetsDirectConfigurations()
         self.DatasetsConfigurations = collections.OrderedDict(sorted(self.DatasetsConfigurations.items()))
 
-    def initializeAlgorithmsResults(self):
-        self.ClassificationAlgorithmsResults = {algorithm: [] for algorithm in self.DatasetsConfigurations['proc_classification']}
-        self.ClusteringAlgorithmsResults = {algorithm: [] for algorithm in self.DatasetsConfigurations['proc_clustering']}
+    def parseDefineLoadExperimentModels(self, processed_config):
+        ParsedConfigs = [config.split('-')[0].strip() for config in processed_config]
+        self.DatasetsConfigurations['config_load_experiment_models'] = ParsedConfigs
+
+    # # TODO: this was to be used in the static configs as a wrapper; however, it is not possible due to multiprocessing, that cannot pickle it
+    # def parseDefineStaticConfigChoiceParameters(self, Options, key):
+    #     def _parseDefineStaticConfigChoiceParameters(self, processed_config):
+    #         if processed_config is not None:
+    #             CallDetails = Options[processed_config]
+    #             self.menuConfigureCallArguments(key, CallDetails['parameters'], 'DatasetsConfigurations')
+    #
+    #     return _parseDefineStaticConfigChoiceParameters
+
+    def parseDefineDatSplitChoice(self, processed_config):
+        if processed_config is not None:
+            CallDetails = Config.ClassificationDataSplit[processed_config]
+            self.menuConfigureCallArguments('config_data_split_parameters', CallDetails['parameters'], 'DatasetsConfigurations')
+
+    def parseDefineEnsembleSelectionChoice(self, processed_config):
+        if processed_config is not None:
+            CallDetails = Config.ClassificationEnsemblesSelection[processed_config]
+            self.menuConfigureCallArguments('config_ensemble_selection_parameters', CallDetails['parameters'], 'DatasetsConfigurations')
+
+    def parseDefineEnsembleConfigurationChoice(self, processed_config):
+        if processed_config is not None:
+            CallDetails = Config.ClassificationEnsembles[processed_config]
+            self.menuConfigureCallArguments('config_ensemble_algorithms_parameters', CallDetails['parameters'], 'DatasetsConfigurations')
 
     '''
     Propheticus UI menus
@@ -203,6 +276,7 @@ class GUI(object):
     '''
     Initial Menu
     '''
+
     def mainMenu(self, choice=0):
         MenuData = {
             '1': {'name': 'Explore Datasets', 'callback': self.menuExploreDatasets},
@@ -224,6 +298,7 @@ class GUI(object):
     '''
     Explore Datasets Menu
     '''
+
     def menuExploreDatasets(self, choice=0):
         MenuData = {
             '1': {'name': 'Select Datasets', 'callback': propheticus.shared.Utils.menuData(self, 'Datasets Menu', propheticus.shared.Utils.getAvailableDatasets(), self.parseDatasetsChoice)},
@@ -240,6 +315,7 @@ class GUI(object):
     '''
     Data Analysis Menu
     '''
+
     def menuAnalysis(self, choice=0):
         MenuDetails = [
             {'name': 'Class Distribution', 'callback': self.DataAnalysis('barPlot')},
@@ -248,8 +324,9 @@ class GUI(object):
 
         if self.DatasetsConfigurations['config_sequential_data'] is True:
             MenuDetails += [
-                {'name': 'Feature Time Series Plot', 'callback': self.DataAnalysis('timeSeries')},
-                {'name': 'Feature Time Series Plot with Standard Deviation', 'callback': self.DataAnalysis('timeSeriesStd')}
+                {'name': 'Feature Time Series Plot By Class', 'callback': self.DataAnalysis('seriesValuesByClass')},
+                {'name': 'Feature Time Series Plot By Class with Standard Deviation', 'callback': self.DataAnalysis('seriesValuesByClassStd')},
+                {'name': 'Feature Time Series By Run', 'callback': self.DataAnalysis('seriesClassByRun')},
             ]
 
         MenuDetails += [
@@ -272,6 +349,7 @@ class GUI(object):
     '''
     Data Configuration Menu
     '''
+
     def menuConfiguration(self, choice):
         MenuData = {}
         for index, (config, ConfigDetails) in enumerate(self.DatasetsStaticConfigs.items()):
@@ -286,10 +364,13 @@ class GUI(object):
     '''
     Data Processing Menu
     '''
+
     def menuProcessing(self, choice):
         MenuData = {
-            '1': {'name': 'Clustering', 'callback': propheticus.shared.Utils.generalMenuData(self, 'Clustering Algorithms', propheticus.shared.Utils.AvailableClusteringAlgorithms, Configurations=self.DatasetsConfigurations, menu_key='proc_clustering')},
-            '2': {'name': 'Classification', 'callback': propheticus.shared.Utils.generalMenuData(self, 'Classification Algorithms', propheticus.shared.Utils.AvailableClassificationAlgorithms, Configurations=self.DatasetsConfigurations, menu_key='proc_classification')},
+            '1': {'name': 'Clustering',
+                  'callback': propheticus.shared.Utils.generalMenuData(self, 'Clustering Algorithms', propheticus.shared.Utils.AvailableClusteringAlgorithms, Configurations=self.DatasetsConfigurations, menu_key='proc_clustering')},
+            '2': {'name': 'Classification',
+                  'callback': propheticus.shared.Utils.generalMenuData(self, 'Classification Algorithms', propheticus.shared.Utils.AvailableClassificationAlgorithms, Configurations=self.DatasetsConfigurations, menu_key='proc_classification')},
             '3': {'name': 'Define Selected Algorithms Configuration', 'callback': self.menuCurrentSelectedAlgorithms},
             '4': {'name': 'Run Selected Algorithms', 'callback': self.parseCurrentConfigurationAlgorithms},
             '-': '',
@@ -297,7 +378,6 @@ class GUI(object):
             'h': {'name': 'Help', 'callback': self.help()}
         }
         propheticus.shared.Utils.printMenu('Processing Menu', MenuData, 'DatasetsConfigurations', self)
-
 
     def menuCurrentSelectedSampling(self, choice=0):
         self.menuCurrentSelectedPreprocessing('balance_data', Config.SamplingCallDetails, 'Sampling')
@@ -320,7 +400,6 @@ class GUI(object):
             MenuData['h'] = {'name': 'Help', 'callback': self.help()}
             propheticus.shared.Utils.printMenu(f'{label} Configuration Menu', MenuData)
 
-
     def parseDefineTechniquesConfigurationChoice(self, key, List, label):
         def _parseDefineTechniquesConfigurationChoice(choice):
             technique = self.DatasetsConfigurations['proc_' + key][int(choice) - 1]
@@ -336,6 +415,7 @@ class GUI(object):
     '''
     Process Results Menu
     '''
+
     def menuCurrentSelectedAlgorithms(self, choice=0):
         Algorithms = self.DatasetsConfigurations['proc_clustering'] + self.DatasetsConfigurations['proc_classification']
         if len(Algorithms) == 1:
@@ -350,6 +430,7 @@ class GUI(object):
     '''
     Process Results Menu
     '''
+
     def menuProcessResults(self, choice=0):
         MenuData = {
             '1': {'name': 'Compare Experiments', 'callback': self.menuCompareResults},
@@ -363,6 +444,7 @@ class GUI(object):
     '''
     Compare Results Menu
     '''
+
     def menuCompareResults(self, choice=0):
         MenuData = {
             '1': {'name': 'Select Experiments for Comparison', 'callback': self.menuSelectExperimentsResults},
@@ -391,12 +473,10 @@ class GUI(object):
 
         propheticus.shared.Utils.menuData(self, 'Experiments Menu', propheticus.shared.Utils.getAvailableExperimentsList(skip_config_parse=True), self.parseExperimentsChoice)()
 
-
-
-
     '''
     Reduce Results Menu
     '''
+
     def menuReduceResults(self, choice=0):
         MenuData = {
             '1': {'name': 'Define Metrics to Archive Experiments', 'callback': propheticus.shared.Utils.menuData(self, 'Metrics Menu', propheticus.shared.Utils.AvailableClassificationMetrics, callback=self.parseRemoveExperimentsChoice)},
@@ -410,6 +490,7 @@ class GUI(object):
     '''
     Datasets Filter Menu
     '''
+
     def menuFilterDatasetsData(self, choice=0):
         if len(self.DatasetsConfigurations['datasets']) == 0:
             propheticus.shared.Utils.printErrorMessage('At least one dataset must be chosen')
@@ -420,15 +501,19 @@ class GUI(object):
             '2': {'name': 'Select Features', 'callback': self.selectDatasetFeatures},
             '3': {'name': 'Filter By Feature Value', 'callback': self.filterFeaturesValues},
             '4': {'name': 'Define Label Field', 'callback': self.defineLabelFeature},
-            '5': {'name': 'Data Sampling', 'callback': self.generalUIData('Data Balancing', propheticus.shared.Utils.AvailableDataBalancing, Configurations=self.DatasetsConfigurations, force_choice=False, clear_data_cache=True, menu_key='proc_balance_data')},
+            '5': {'name': 'Data Sampling',
+                  'callback': self.generalUIData('Data Balancing', propheticus.shared.Utils.AvailableDataBalancing, Configurations=self.DatasetsConfigurations, force_choice=False, clear_data_cache=True, menu_key='proc_balance_data')},
             '6': {'name': 'Data Sampling Configs', 'callback': self.menuCurrentSelectedSampling},
-            '7': {'name': 'Dimen. Reduction', 'callback': self.generalUIData('Dimensionality Reduction', propheticus.shared.Utils.AvailableDimensionalityReduction, Configurations=self.DatasetsConfigurations, force_choice=False, clear_data_cache=True, menu_key='proc_reduce_dimensionality')},
+            '7': {'name': 'Dimen. Reduction', 'callback': self.generalUIData('Dimensionality Reduction', propheticus.shared.Utils.AvailableDimensionalityReduction, Configurations=self.DatasetsConfigurations, force_choice=False, clear_data_cache=True,
+                                                                             menu_key='proc_reduce_dimensionality')},
             '8': {'name': 'Dimen. Reduction Configs', 'callback': self.menuCurrentSelectedDimRed},
-            '9': {'name': 'Exclude Samples By Class', 'callback': self.generalUIData('Data Classes', list(Config.ClassesDescription.values()), Configurations=self.DatasetsConfigurations, force_choice=False, clear_data_cache=True, menu_key='datasets_exclude_classes')}
+            '9': {'name': 'Exclude Samples By Class',
+                  'callback': self.generalUIData('Data Classes', list(Config.ClassesDescription.values()), Configurations=self.DatasetsConfigurations, force_choice=False, clear_data_cache=True, menu_key='datasets_exclude_classes')}
         }
 
         if self.DatasetsConfigurations['config_sequential_data'] is True:
-            MenuData['10'] = {'name': 'Exclude Runs By Class', 'callback': self.generalUIData('Data Classes', list(Config.ClassesDescription.values()), Configurations=self.DatasetsConfigurations, menu_key='datasets_exclude_run_classes', force_choice=False, clear_data_cache=True)}
+            MenuData['10'] = {'name': 'Exclude Runs By Class',
+                              'callback': self.generalUIData('Data Classes', list(Config.ClassesDescription.values()), Configurations=self.DatasetsConfigurations, menu_key='datasets_exclude_run_classes', force_choice=False, clear_data_cache=True)}
 
         MenuData['-'] = ''
         MenuData['0'] = {'name': 'Back'}
@@ -440,17 +525,20 @@ class GUI(object):
         algorithm = (self.DatasetsConfigurations['proc_clustering'] + self.DatasetsConfigurations['proc_classification'])[int(choice) - 1]
         if algorithm in Config.ClassificationAlgorithmsCallDetails:
             AlgorithmDetails = Config.ClassificationAlgorithmsCallDetails[algorithm]
+            key = 'proc_classification_algorithms_parameters'
         elif algorithm in Config.ClusteringAlgorithmsCallDetails:
             AlgorithmDetails = Config.ClusteringAlgorithmsCallDetails[algorithm]
+            key = 'proc_clustering_algorithms_parameters'
         else:
             propheticus.shared.Utils.printFatalMessage('Invalid algorithm: ' + algorithm)
-            
-        self.menuConfigureCallArguments(algorithm, AlgorithmDetails['parameters'], 'DatasetsConfigurations', 'proc_classification_algorithms_parameters')
-        
+
+        self.menuConfigureCallArguments(algorithm, AlgorithmDetails['parameters'], 'DatasetsConfigurations', key)
+
         return -1
 
     def resetConfigurationParameters(self, technique, ParametersDetails, ConfigurationVariable, key):
         _self = self
+
         def _resetConfigurationParameters(choice):
             TechniquesConfigurations = getattr(_self, ConfigurationVariable)[key]
             if technique in TechniquesConfigurations:
@@ -460,22 +548,26 @@ class GUI(object):
 
         return _resetConfigurationParameters
 
-
-    def defineConfigurationParameter(self, technique, ParametersDetails, ConfigurationVariable, key):
+    def defineConfigurationParameter(self, technique, ParametersDetails, ConfigurationVariable, key=None):
         _self = self
+
         def _defineConfigurationParameter(choice):
-            AlgorithmConfigurations = getattr(_self, ConfigurationVariable)[key]
+            if key is None:
+                key_path = []
+                AlgorithmConfigurations = getattr(_self, ConfigurationVariable)
+            else:
+                key_path = key if isinstance(key, list) else [key]
+                AlgorithmConfigurations = propheticus.shared.Utils.getNestedDictionaryValue(getattr(_self, ConfigurationVariable), key_path)
+
+            subkey_path = key_path + [technique]
 
             if technique not in AlgorithmConfigurations:
                 AlgorithmConfigurations[technique] = {}
-            
+
             def _setConfigurationParameter(choice):
                 # TODO: VALIDATE FORMAT, type of data, and values (e.g. range); requires an updated list in Utils
                 # NOTE: usage example - field_name:type-value
                 ChoiceDetails = choice.split(':')
-                if len(ChoiceDetails) != 2:
-                    propheticus.shared.Utils.printErrorMessage('Invalid input. It should have the following structure => field_name:datatype-value', acknowledge=False)
-                    return
 
                 field_name = ChoiceDetails[0]
                 if field_name.isdigit():
@@ -485,21 +577,38 @@ class GUI(object):
                         propheticus.shared.Utils.printErrorMessage(f'Invalid input. Parameter "{field_name}" does not exist', acknowledge=False)
                         return
 
-                ValueDetails = ChoiceDetails[1].split('-')
-                if len(ValueDetails) != 2:
-                    propheticus.shared.Utils.printErrorMessage('Invalid input. It should have the following structure => field_name:datatype-value', acknowledge=False)
-                    return
+                field_type = ParametersDetails[field_name]['type']
+                if field_type == 'configuration':
+                    if 'data' not in ParametersDetails[field_name]:
+                        propheticus.shared.Utils.printFatalMessage('A configuration parameter was defined but no data was provided!')
 
-                ValidDataTypes = ['float', 'int', 'bool', 'str']
-                value_type = ValueDetails[0]
-                if value_type not in ValidDataTypes:
-                    propheticus.shared.Utils.printErrorMessage('Invalid data type. Valid types are: ' + ', '.join(ValidDataTypes), acknowledge=False)
-                    return
+                    CallDetails = ParametersDetails[field_name]['data']
+                    _self.menuConfigureCallArguments(field_name, CallDetails['parameters'], ConfigurationVariable, subkey_path)
+                else:
+                    if len(ChoiceDetails) != 2:
+                        propheticus.shared.Utils.printErrorMessage('Invalid input. It should have the following structure => field_name:datatype-value', acknowledge=False)
+                        return
 
-                _value_type = pydoc.locate(value_type)
-                value = ValueDetails[1]
-                _value = _value_type(value)
-                AlgorithmConfigurations[technique][field_name] = _value
+                    ValueDetails = ChoiceDetails[1].split('-')
+                    if len(ValueDetails) != 2:
+                        propheticus.shared.Utils.printErrorMessage('Invalid input. It should have the following structure => field_name:datatype-value', acknowledge=False)
+                        return
+
+                    ValidDataTypes = ['float', 'int', 'bool', 'str']
+                    value_type = ValueDetails[0]
+                    if value_type not in ValidDataTypes:
+                        propheticus.shared.Utils.printErrorMessage('Invalid data type. Valid types are: ' + ', '.join(ValidDataTypes), acknowledge=False)
+                        return
+
+                    _value_type = pydoc.locate(value_type)
+                    value = ValueDetails[1]
+                    _value = _value_type(value)
+                    AlgorithmConfigurations[technique][field_name] = _value
+
+                    if 'configuration' in ParametersDetails[field_name]:
+                        configuration_key = ParametersDetails[field_name]['configuration']['key']
+                        CallDetails = ParametersDetails[field_name]['configuration']['data'][_value]
+                        _self.menuConfigureCallArguments(configuration_key, CallDetails['parameters'], ConfigurationVariable, subkey_path)
 
             MenuData = {}
             for index, (name, ParameterDetails) in enumerate(ParametersDetails.items()):
@@ -533,11 +642,9 @@ class GUI(object):
 
             propheticus.shared.Utils.printMenu(f'Configuration Parameters ({technique})', MenuData, ConfigurationVariable, _self)
 
-
-
         return _defineConfigurationParameter
 
-    def menuConfigureCallArguments(self, technique, ParametersDetails, ConfigurationVariable, key):
+    def menuConfigureCallArguments(self, technique, ParametersDetails, ConfigurationVariable, key=None):
         MenuData = {
             '1': {'name': 'Define Parameter', 'callback': self.defineConfigurationParameter(technique, ParametersDetails, ConfigurationVariable, key)},
             '2': {'name': 'Reset All Parameters', 'callback': self.resetConfigurationParameters(technique, ParametersDetails, ConfigurationVariable, key)},
@@ -547,16 +654,16 @@ class GUI(object):
         }
         propheticus.shared.Utils.printMenu(f'Call Parameters Configuration ({technique})', MenuData, 'DatasetsConfigurations', self)
 
-
     '''
     GUI Menu Function (required because of clearing cache
     '''
+
     def generalUIData(self, base_menu_name, MenuData, Configurations, print_menu_configurations=False, show_all_option=True, force_choice=True, clear_data_cache=False, menu_key=None):
         if menu_key is None:
             menu_key = base_menu_name.lower().replace(' ', '_')
 
         def _parseGeneralChoice(choice):
-            valid = propheticus.shared.Utils._parseChoicesSelection(menu_key, base_menu_name, MenuData, choice, Configurations, force_choice=force_choice)
+            valid = propheticus.shared.Utils.parseChoicesSelection(menu_key, base_menu_name, MenuData, choice, Configurations, force_choice=force_choice)
             if valid == -1 and clear_data_cache is True:
                 self.clearDataCache()
 
@@ -572,10 +679,10 @@ class GUI(object):
             force_choice=force_choice
         )
 
-
     '''
     Experiments Choice Parsing
     '''
+
     def parseExperimentsChoice(self, choice):
         # NOTE: expected string can be as follows: f1:v11,v12&f2:v21,v22
         if ':' in choice:
@@ -592,9 +699,18 @@ class GUI(object):
                     search_key = searches[0]
                     search_values = searches[1]
 
+                    if search_key != 'identifier' and search_key not in Experiment['configuration']:
+                        propheticus.shared.Utils.printErrorMessage(f'Search key {search_key} is not valid!')
+                        self.ExperimentsConfigurations['comparison_experiments'] = []
+                        return
+
                     add = False
                     for search_value in search_values.split(','):
-                        if search_value.lower() in json.dumps(Experiment['configuration'][search_key]).lower():
+                        if search_key == 'identifier':
+                            if search_value == experiment_identifier:
+                                add = True
+                                break
+                        elif search_value.lower() in json.dumps(Experiment['configuration'][search_key]).lower():
                             add = True
                             break
 
@@ -612,12 +728,12 @@ class GUI(object):
             return -1
         else:
             AvailableExperiments = propheticus.shared.Utils.getAvailableExperimentsList(use_cached=False, skip_config_parse=True, field='identifier')
-            return propheticus.shared.Utils._parseChoicesSelection('comparison_experiments', 'Experiments', AvailableExperiments, choice, Configurations=self.ExperimentsConfigurations)
-
+            return propheticus.shared.Utils.parseChoicesSelection('comparison_experiments', 'Experiments', AvailableExperiments, choice, Configurations=self.ExperimentsConfigurations)
 
     '''
     Select Experiments by Min Metric
     '''
+
     def parseRemoveExperimentsChoice(self, choice):
         loop = True
         while loop:
@@ -656,7 +772,7 @@ class GUI(object):
                 else:
                     metric_name = MetricDetails[0]
                     _metric_id = propheticus.shared.Utils.AvailableClassificationMetrics.index(metric_name)
-                
+
                 self.ExperimentsConfigurations['remove_experiments'].append({
                     'index': _metric_id,
                     'metric_name': metric_name,
@@ -746,6 +862,7 @@ class GUI(object):
     '''
     Execute Batch Configurations
     '''
+
     def executeBatchExecution(self, choice=0):
         from InstanceBatchExecution import InstanceBatchExecution
         oBatchExecution = InstanceBatchExecution(self)
@@ -754,6 +871,7 @@ class GUI(object):
     '''
     Compare Experiments
     '''
+
     def compareExperiments(self, choice):
         # TODO: get this from config
         StatisticalDetails = {
@@ -778,6 +896,7 @@ class GUI(object):
     '''
     Datasets selection function
     '''
+
     def parseDatasetsChoice(self, choice):
         if choice.strip() == '':
             propheticus.shared.Utils.printErrorMessage('At least one dataset must be selected')
@@ -793,7 +912,8 @@ class GUI(object):
 
         if confirm == 'y':
             self.initializeDatasetsDirectConfigurations()
-            valid = propheticus.shared.Utils._parseChoicesSelection('datasets', 'Datasets', [dataset.replace('.data.txt', '') for dataset in propheticus.shared.Utils.getAvailableDatasets()], choice, Configurations=self.DatasetsConfigurations, show_selection_message=False)
+            valid = propheticus.shared.Utils.parseChoicesSelection('datasets', 'Datasets', [dataset.replace('.data.txt', '') for dataset in propheticus.shared.Utils.getAvailableDatasets()], choice, Configurations=self.DatasetsConfigurations,
+                                                                   show_selection_message=False)
             if valid is False:
                 return
             elif valid == -1:
@@ -816,6 +936,7 @@ class GUI(object):
     '''
     Exclude Features Datasets Filter
     '''
+
     def defineLabelFeature(self, choice):
         current_excluded_features = [Values['index'] for Values in self.DatasetsConfigurations['pre_excluded_features']]
         self.printCurrentDatasetsHeaders()
@@ -844,12 +965,14 @@ class GUI(object):
         self.DatasetsConfigurations['pre_excluded_features_label'] = []
         if Label is not False:
             for index, header in enumerate(self.oDataManagement.datasets_headers):
+                # TODO: this may be "dangerous" and remove unwanted columns/features; somehow fix or give an alert?
                 if index != Label['index'] and 'label' in header and index not in current_excluded_features:
                     self.DatasetsConfigurations['pre_excluded_features_label'].append({'index': index, 'label': self.oDataManagement.datasets_headers[int(index)]})
 
     '''
     Exclude Features Datasets Filter
     '''
+
     def excludeDatasetFeatures(self, choice):
         self.printCurrentDatasetsHeaders()
 
@@ -916,6 +1039,7 @@ class GUI(object):
     '''
     Select Features Datasets Filter
     '''
+
     def selectDatasetFeatures(self, choice):
         self.printCurrentDatasetsHeaders()
 
@@ -972,6 +1096,7 @@ class GUI(object):
     '''
     Select By Features Value Filter
     '''
+
     def filterFeaturesValues(self, choice):
         self.printCurrentDatasetsHeaders()
 
@@ -1027,9 +1152,11 @@ class GUI(object):
                     'values': FeatureDetails[1]
                 })
 
+    # TODO: fix naming convention; why start capital?
     def DataAnalysis(self, method):
         _self = self
         _method = method if method == 'descriptiveAnalysis' else 'DataAnalysis'
+
         def _DataAnalysis(choice=None):
             _self.action_context = _method
             error = _self.exportDatasets()
@@ -1043,17 +1170,28 @@ class GUI(object):
 
     def generalizableGUIConfiguration(self, config):
         _self = self
+
         def _generalizableGUIConfiguration(choice):
             ConfigDetails = _self.DatasetsStaticConfigs[config]
             if 'reset_cache' in ConfigDetails and ConfigDetails['reset_cache'] is True:
                 _self.clearDataCache()
 
-            if ConfigDetails['type'] not in [int, bool]:
-                propheticus.shared.Utils.printFatalMessage('Unexpected configuration type: ' + ConfigDetails['type'])
+            if ConfigDetails['type'] not in [int, bool, 'items', 'item']:
+                propheticus.shared.Utils.printFatalMessage('Unexpected configuration type: ' + str(ConfigDetails['type']))
 
             while True:
                 valid = True
-                _choice = choice = propheticus.shared.Utils.printInputMessage('Define the intended value for ' + config + ': ')
+                values = ''
+                if 'values' in ConfigDetails:
+                    if len(ConfigDetails['values']) == 0:
+                        propheticus.shared.Utils.printErrorMessage(f'No values were provided for config {config}')
+                        return
+
+                    values = '\n' + '\n'.join([f'[{index + 1}] {value}' for index, value in enumerate(ConfigDetails['values'])])
+                elif ConfigDetails['type'] == 'item':
+                    propheticus.shared.Utils.printFatalMessage('Static configuration of type "item" is only valid with predefined values!')
+
+                _choice = choice = propheticus.shared.Utils.printInputMessage(f'Define the intended value for {config}: {values}')
                 if choice.strip() != '':
                     if ConfigDetails['type'] in [int, bool]:
                         if not choice.isdigit():
@@ -1075,6 +1213,27 @@ class GUI(object):
                             propheticus.shared.Utils.printErrorMessage('Invalid value! Must be must be either 0 or 1')
                             valid = False
 
+                    elif ConfigDetails['type'] in ['item']:
+                        if choice.isdigit():
+                            _choice = int(choice)
+                            if _choice < 1 or _choice > len(ConfigDetails['values']):
+                                propheticus.shared.Utils.printErrorMessage(f"Invalid value! Must be must be between 1 and {len(ConfigDetails['values'])}")
+                                valid = False
+                            else:
+                                _choice = ConfigDetails['values'][_choice - 1]
+                        else:
+                            if choice not in ConfigDetails['values']:
+                                propheticus.shared.Utils.printErrorMessage('Invalid value! Must be one of the predefined values!')
+                                valid = False
+                            else:
+                                _choice = choice
+
+                    elif ConfigDetails['type'] in ['items']:
+                        _choice = propheticus.shared.Utils._parseChoicesSelection(ConfigDetails['values'], choice)
+
+                    else:
+                        propheticus.shared.Utils.printFatalMessage(f"Invalid datatype provided for static configuration! {ConfigDetails['type']}")
+
                     if valid is True:
                         break
 
@@ -1082,10 +1241,18 @@ class GUI(object):
                     break
 
                 else:
-                    # TODO: improve this message by providing further details
                     propheticus.shared.Utils.printErrorMessage('Invalid value! Must be must be ' + str(ConfigDetails['type']))
 
-            _self.DatasetsConfigurations[config] = ConfigDetails['type'](_choice) if choice.strip() != '' else ConfigDetails['default']
+            if choice.strip() != '':
+                processed_config = ConfigDetails['type'](_choice) if ConfigDetails['type'] in [int, bool] else _choice
+            else:
+                processed_config = ConfigDetails['default']
+
+            _self.DatasetsConfigurations[config] = processed_config
+
+            if 'callback' in ConfigDetails:
+                ConfigDetails['callback'](processed_config)
+
             propheticus.shared.Utils.printStatusMessage('Configuration successfully defined for ' + config + ': ' + str(_self.DatasetsConfigurations[config]))
 
         return _generalizableGUIConfiguration
@@ -1133,12 +1300,83 @@ class GUI(object):
         self.DatasetsConfigurations['config_sliding_window'] = int(choice) if choice.strip() != '' else 1
         propheticus.shared.Utils.printStatusMessage('Sliding window successfully defined: ' + choice)
 
-    def parseCurrentConfigurationAlgorithms(self, choice=None, skip_validation=False):
-        if len(self.DatasetsConfigurations['proc_clustering']) == 0 and len(self.DatasetsConfigurations['proc_classification']) == 0:
+    def validateCurrentConfigurationAlgorithms(self):
+        # TODO: most of this function should be moved to each class (Classification/Clustering) for a validation method
+        # TODO: this logic most likely requires updating!
+
+        valid = True
+
+        classification_algorithms = self.DatasetsConfigurations['proc_classification']
+        clustering_algorithms = self.DatasetsConfigurations['proc_clustering']
+        load_experiment_models = self.DatasetsConfigurations['config_load_experiment_models']
+        ensemble_algorithms = self.DatasetsConfigurations['config_ensemble_algorithms']
+        ensemble_selection = self.DatasetsConfigurations['config_ensemble_selection']
+        datasets = self.DatasetsConfigurations['datasets']
+
+        algorithms_defined = len(clustering_algorithms) > 0 or len(classification_algorithms) > 0
+        if load_experiment_models is not None:
+            if algorithms_defined is True:
+                propheticus.shared.Utils.printErrorMessage('Either algorithms or config_load_experiment_models can be defined, but not both')
+                valid = False
+
+            Datasets = None
+            for load_experiment in load_experiment_models:
+                experiment_id = load_experiment.split('.')[0]
+                ExperimentDetails = propheticus.shared.Utils.getAvailableExperiments()[experiment_id]
+                ExperimentDatasets = ExperimentDetails['configuration']['datasets']
+                if Datasets is None:
+                    Datasets = ExperimentDatasets
+
+                if ExperimentDatasets != Datasets:
+                    propheticus.shared.Utils.printErrorMessage('The same datasets must be used for all the loaded models')
+                    valid = False
+                    break
+
+            if len(datasets) > 0 and Datasets != datasets:
+                propheticus.shared.Utils.printErrorMessage('The selected datasets must be the same as those used for the loaded models')
+                valid = False
+
+            if len(load_experiment_models) > 1 and ensemble_algorithms is None:
+                propheticus.shared.Utils.printErrorMessage('More than one experiment was given to load but no ensemble algorithm was provided')
+                valid = False
+
+        elif algorithms_defined is False:
             propheticus.shared.Utils.printErrorMessage('At least one algorithm must be chosen')
-        if len(self.DatasetsConfigurations['datasets']) == 0:
+            valid = False
+
+        if len(datasets) == 0:
             propheticus.shared.Utils.printErrorMessage('At least one dataset must be chosen')
-        else:
+            valid = False
+
+        if ensemble_algorithms is not None:
+            if clustering_algorithms:
+                propheticus.shared.Utils.printErrorMessage('Ensemble option cannot be used with clustering algorithms!')
+                valid = False
+
+            if self.DatasetsConfigurations['config_save_experiment_models'] is True:
+                propheticus.shared.Utils.printErrorMessage('When using ensemble models it is not possible to save intermediate models!')
+                valid = False
+
+            # TODO: this logic should be associated with a required minimum number of experiments in the ensembles configs: ie stacking can work wiht 1, hard voting should have 3
+            # classification_algorithms = classification_algorithms
+            # if (not isinstance(classification_algorithms, list) or len(classification_algorithms) < 2) and (not isinstance(load_experiment_models, list) or len(load_experiment_models) < 2):
+            #     propheticus.shared.Utils.printErrorMessage('In order to use custom ensembling approaches at least 2 algorithms must be trained/loaded!')
+            #     valid = False
+
+        elif ensemble_selection is not None:
+            propheticus.shared.Utils.printFatalMessage('Ensemble selection heuristic can only be defined when using ensemble of algorithms')
+            valid = False
+
+        # TODO: this validation is specifically internal to the Classification module
+        # elif isinstance(classification_algorithms, list):
+        #     propheticus.shared.Utils.printErrorMessage('Only a single algorithm can be provided!')
+        #     valid = False
+
+        return valid
+
+    def parseCurrentConfigurationAlgorithms(self, choice=None, skip_validation=False):
+        validated = self.validateCurrentConfigurationAlgorithms()
+        if validated is True:
             if self.DatasetsConfigurations['config_grid_search']:
                 if self.DatasetsConfigurations['proc_classification'] and not self.DatasetsConfigurations['proc_classification_grid_params']:
                     propheticus.shared.Utils.printStatusMessage('Classification grid-search is configured but no parameters were passed. Base grid-search parameters will be used!')
@@ -1148,8 +1386,6 @@ class GUI(object):
 
             confirm = 'y' if skip_validation else propheticus.shared.Utils.printConfirmationMessage('This will override previous results for the same configurations. Continue?')
             if confirm == 'y':
-                self.initializeAlgorithmsResults()
-
                 self.action_context = 'algorithms'
                 error = self.exportDatasets()
                 if not error:
@@ -1178,71 +1414,143 @@ class GUI(object):
 
                             self.DatasetsConfigurations['proc_clustering_grid_params'] = GridParameters
 
-                    propheticus.shared.Utils.printCurrentConfigurations(self.DatasetsConfigurations, hide_empty=True)
+                    propheticus.shared.Utils.printCurrentConfigurations(self.DatasetsConfigurations, hide_empty=True, truncate=self.DatasetsConfigurations['config_truncate_configurations'])
 
-                    Algorithms = {
-                        'proc_classification': {
-                            'instance': propheticus.core.Classification(
-                                Context=self,
-                                dataset_name=self.getDatasetsIdentifiers(),
-                                configurations_id=self.getConfigurationsIdentifier(),
-                                description=propheticus.shared.Utils.toStringCurrentConfigurations(self.DatasetsConfigurations),
-                                display_visuals=self.display_visuals,
-                                balance_data=self.DatasetsConfigurations['proc_balance_data'],
-                                reduce_dimensionality=self.DatasetsConfigurations['proc_reduce_dimensionality'],
-                                normalize=self.DatasetsConfigurations['proc_normalize_data'],
-                                seed_count=self.DatasetsConfigurations['config_seed_count'],
-                                cv_fold=self.DatasetsConfigurations['config_cv_fold'],
-                                grid_search=self.DatasetsConfigurations['config_grid_search'],
-                                grid_inner_cv_fold=self.DatasetsConfigurations['config_grid_inner_cv_fold'],
-                                mode=self.mode,
-                                positive_classes=PositiveClasses
-                            ),
-                            'algorithms': self.DatasetsConfigurations['proc_classification']
-                        },
-                        'proc_clustering': {
-                            'instance': propheticus.core.Clustering(
-                                Context=self,
-                                dataset_name=self.getDatasetsIdentifiers(),
-                                configurations_id=self.getConfigurationsIdentifier(),
-                                description=propheticus.shared.Utils.toStringCurrentConfigurations(self.DatasetsConfigurations),
-                                display_visuals=self.display_visuals,
-                                balance_data=self.DatasetsConfigurations['proc_balance_data'],
-                                reduce_dimensionality=self.DatasetsConfigurations['proc_reduce_dimensionality'],
-                                normalize=self.DatasetsConfigurations['proc_normalize_data'],
-                                seed_count=self.DatasetsConfigurations['config_seed_count'],
-                                grid_search=self.DatasetsConfigurations['config_grid_search'],
-                                mode=self.mode,
-                                positive_classes=PositiveClasses
-                            ),
-                            'algorithms': self.DatasetsConfigurations['proc_clustering']
-                        }
-                     }
+                    '''
+                    Run Classification Algorithms
+                    '''
+                    oClassification = propheticus.core.Classification(
+                        Context=self,
+                        dataset_name=self.getDatasetsIdentifiers(),
+                        configurations_id=self.getConfigurationsIdentifier(),
+                        description=propheticus.shared.Utils.toStringCurrentConfigurations(self.DatasetsConfigurations),
+                        display_visuals=self.display_visuals,
+                        balance_data=self.DatasetsConfigurations['proc_balance_data'],
+                        balance_data_params=self.DatasetsConfigurations['proc_balance_data_parameters'],
+                        reduce_dimensionality=self.DatasetsConfigurations['proc_reduce_dimensionality'],
+                        reduce_dimensionality_params=self.DatasetsConfigurations['proc_reduce_dimensionality_parameters'],
+                        normalize=self.DatasetsConfigurations['proc_normalize_data'],
+                        data_split=self.DatasetsConfigurations['config_data_split'],
+                        data_split_parameters=self.DatasetsConfigurations['config_data_split_parameters'],
+                        seed_count=self.DatasetsConfigurations['config_seed_count'],
+                        cv_fold=self.DatasetsConfigurations['config_cv_fold'] if 'config_cv_fold' in self.DatasetsConfigurations else None,
+                        ensemble_algorithms=self.DatasetsConfigurations['config_ensemble_algorithms'],
+                        ensemble_algorithms_parameters=self.DatasetsConfigurations['config_ensemble_algorithms_parameters'],
+                        ensemble_selection=self.DatasetsConfigurations['config_ensemble_selection'],
+                        ensemble_selection_parameters=self.DatasetsConfigurations['config_ensemble_selection_parameters'],
+                        grid_search=self.DatasetsConfigurations['config_grid_search'],
+                        grid_inner_cv_fold=self.DatasetsConfigurations['config_grid_inner_cv_fold'],
+                        mode=self.mode,
+                        positive_classes=PositiveClasses,
+                        save_complete_model=self.DatasetsConfigurations['config_save_complete_model'],
+                        save_experiment_models=self.DatasetsConfigurations['config_save_experiment_models'],
+                        load_experiment_models=self.DatasetsConfigurations['config_load_experiment_models'],
+                    )
 
-                    if self.mode == 'cli':
-                        Config.thread_level_ = propheticus.shared.Utils.getBestParallelizationLocation(self.DatasetsConfigurations)
-                        propheticus.shared.Utils.printStatusMessage('Parallelization at level: ' + Config.thread_level_)
+                    ClassificationAlgorithms = self.DatasetsConfigurations['proc_classification']
 
-                    for label, Details in Algorithms.items():
-                        for algorithm in sorted(Details['algorithms']):
-                            if algorithm in self.DatasetsConfigurations[label + '_grid_params']:
-                                GridSearchParameters = self.DatasetsConfigurations[label + '_grid_params'][algorithm]
+                    if self.DatasetsConfigurations['config_load_experiment_models'] is not None:
+                        if self.mode == 'cli':
+                            Config.thread_level_ = propheticus.shared.Utils.getBestParallelizationLocation(self.DatasetsConfigurations)
+                            propheticus.shared.Utils.printStatusMessage('Parallelizing at level: ' + Config.thread_level_)
+
+                        task_basename = propheticus.shared.Utils.hash(str(self.DatasetsConfigurations['config_load_experiment_models']))
+                        self.ClassificationAlgorithmsResults = {task_basename: []}
+                        oClassification.runModel(Dataset=self._DataCache, task_basename=task_basename)
+
+                    elif self.DatasetsConfigurations['config_ensemble_algorithms'] is not None:
+                        if self.mode == 'cli':
+                            Config.thread_level_ = propheticus.shared.Utils.getBestParallelizationLocation(self.DatasetsConfigurations)
+                            propheticus.shared.Utils.printStatusMessage('Parallelizing at level: ' + Config.thread_level_)
+
+                        task_basename = str(ClassificationAlgorithms)
+                        self.ClassificationAlgorithmsResults = {task_basename: []}
+
+                        if len(ClassificationAlgorithms) > 0:
+                            oClassification.runModel(
+                                algorithm=ClassificationAlgorithms,
+                                task_basename=str(task_basename),
+                                Dataset=self._DataCache,
+                                Parameters=self.DatasetsConfigurations['proc_classification_algorithms_parameters'],
+                                GridSearchParameters=self.DatasetsConfigurations['proc_classification_grid_params']
+                            )
+
+                    else:
+                        self.ClassificationAlgorithmsResults = {}
+                        for algorithm in sorted(ClassificationAlgorithms):
+                            if self.mode == 'cli':
+                                AlgConfigs = copy.deepcopy(self.DatasetsConfigurations)
+                                AlgConfigs['proc_classification'] = [algorithm]
+                                Config.thread_level_ = thread_level = propheticus.shared.Utils.getBestParallelizationLocation(AlgConfigs)
+                                propheticus.shared.Utils.printStatusMessage(f'Parallelizing {algorithm} at level: ' + Config.thread_level_)
+
+                            task_basename = algorithm
+                            self.ClassificationAlgorithmsResults[task_basename] = []
+
+                            if algorithm in self.DatasetsConfigurations['proc_classification_grid_params']:
+                                GridSearchParameters = self.DatasetsConfigurations['proc_classification_grid_params'][algorithm]
                             else:
                                 GridSearchParameters = False
 
-                            if algorithm in self.DatasetsConfigurations[label + '_algorithms_parameters']:
-                                Parameters = self.DatasetsConfigurations[label + '_algorithms_parameters'][algorithm]
+                            if algorithm in self.DatasetsConfigurations['proc_classification_algorithms_parameters']:
+                                Parameters = self.DatasetsConfigurations['proc_classification_algorithms_parameters'][algorithm]
                             else:
                                 Parameters = False
 
-                            getattr(Details['instance'], 'runModel')(
+                            oClassification.runModel(
                                 algorithm=algorithm,
+                                task_basename=task_basename,
                                 Dataset=self._DataCache,
                                 Parameters=Parameters,
-                                GridSearchParameters=GridSearchParameters,
-                                DimRedParameters=self.DatasetsConfigurations['proc_reduce_dimensionality_parameters'],
-                                SamplingParameters=self.DatasetsConfigurations['proc_balance_data_parameters']
+                                GridSearchParameters=GridSearchParameters
                             )
+
+                    '''
+                    Run Clustering Algorithms
+                    '''
+                    oClustering = propheticus.core.Clustering(
+                        Context=self,
+                        dataset_name=self.getDatasetsIdentifiers(),
+                        configurations_id=self.getConfigurationsIdentifier(),
+                        description=propheticus.shared.Utils.toStringCurrentConfigurations(self.DatasetsConfigurations),
+                        display_visuals=self.display_visuals,
+                        balance_data=self.DatasetsConfigurations['proc_balance_data'],
+                        balance_data_params=self.DatasetsConfigurations['proc_balance_data_parameters'],
+                        reduce_dimensionality=self.DatasetsConfigurations['proc_reduce_dimensionality'],
+                        reduce_dimensionality_params=self.DatasetsConfigurations['proc_reduce_dimensionality_parameters'],
+                        normalize=self.DatasetsConfigurations['proc_normalize_data'],
+                        seed_count=self.DatasetsConfigurations['config_seed_count'],
+                        grid_search=self.DatasetsConfigurations['config_grid_search'],
+                        mode=self.mode,
+                        positive_classes=PositiveClasses
+                    )
+
+                    self.ClusteringAlgorithmsResults = {algorithm: [] for algorithm in self.DatasetsConfigurations['proc_clustering']}
+
+                    ClusteringAlgorithms = self.DatasetsConfigurations['proc_clustering']
+                    for algorithm in sorted(ClusteringAlgorithms):
+                        if self.mode == 'cli':
+                            AlgConfigs = copy.deepcopy(self.DatasetsConfigurations)
+                            AlgConfigs['proc_clustering'] = [algorithm]
+                            Config.thread_level_ = propheticus.shared.Utils.getBestParallelizationLocation(AlgConfigs)
+                            propheticus.shared.Utils.printStatusMessage(f'Parallelizing {algorithm} at level: ' + Config.thread_level_)
+
+                        if algorithm in self.DatasetsConfigurations['proc_clustering_grid_params']:
+                            GridSearchParameters = self.DatasetsConfigurations['proc_clustering_grid_params'][algorithm]
+                        else:
+                            GridSearchParameters = False
+
+                        if algorithm in self.DatasetsConfigurations['proc_clustering_algorithms_parameters']:
+                            Parameters = self.DatasetsConfigurations['proc_clustering_algorithms_parameters'][algorithm]
+                        else:
+                            Parameters = False
+
+                        oClustering.runModel(
+                            algorithm=algorithm,
+                            Dataset=self._DataCache,
+                            Parameters=Parameters,
+                            GridSearchParameters=GridSearchParameters
+                        )
 
                     self.processResults()
 
@@ -1253,9 +1561,11 @@ class GUI(object):
     '''
     Utility Functions
     '''
+
     def help(self):
         funcion = inspect.stack()[1][3]
         _self = self
+
         def _help(choice):
             propheticus.shared.Utils.printBreadCrumb('Propheticus Help')
             # propheticus.shared.Utils.printNewLine()
@@ -1285,6 +1595,9 @@ class GUI(object):
                 if feature not in Headers:
                     propheticus.shared.Utils.printWarningMessage('Static feature does not exist in the chosen datasets: ' + feature)
                     continue
+                elif Headers.index(feature) == 0:
+                    propheticus.shared.Utils.printErrorMessage(f'Static feature {feature} is the run title and cannot be removed')
+                    continue
 
                 FeaturesDetails.append({'index': Headers.index(feature), 'label': feature})
 
@@ -1311,6 +1624,7 @@ class GUI(object):
         start_time = time.time()
 
         ExportedData = self.oDataManagement.exportData(
+            self.mode,
             self.DatasetsConfigurations['datasets'],
             self.DatasetsConfigurations['config_sliding_window'],
             self.DatasetsConfigurations['config_sequential_data'],
@@ -1323,6 +1637,7 @@ class GUI(object):
             self.DatasetsConfigurations['pre_filter_feature_values'],
             self.DatasetsConfigurations['datasets_exclude_classes'],
             self.DatasetsConfigurations['datasets_exclude_run_classes'],
+            self.DatasetsConfigurations['datasets_classes_remap'],
         )
 
         if ExportedData is False:
@@ -1356,8 +1671,11 @@ class GUI(object):
         if label_occurrences > 1:
             propheticus.shared.Utils.printWarningMessage('Multiple features have the term label. Be alert for false predictors! ')
 
-        Config.thread_level_ = propheticus.shared.Utils.THREAD_LEVEL_ALGORITHM
+        # Config.thread_level_ = propheticus.shared.Utils.THREAD_LEVEL_ALGORITHM
         if self.action_context != 'algorithms':
+            if not hasattr(Config, 'thread_level_'):
+                Config.thread_level_ = propheticus.shared.Utils.THREAD_LEVEL_ALGORITHM
+
             if self.DatasetsConfigurations['proc_reduce_dimensionality'] is not False and 'variance' in self.DatasetsConfigurations['proc_reduce_dimensionality']:
                 CallArguments = copy.deepcopy(self.DatasetsConfigurations['proc_reduce_dimensionality_parameters']['variance']) if 'variance' in self.DatasetsConfigurations['proc_reduce_dimensionality_parameters'] else {}
                 CallDetails = Config.DimensionalityReductionCallDetails['variance']
@@ -1372,7 +1690,10 @@ class GUI(object):
                 Dataset['data'] = Estimator.fit_transform(Dataset['data'])
 
             if self.DatasetsConfigurations['proc_reduce_dimensionality'] and (len(self.DatasetsConfigurations['proc_reduce_dimensionality']) > 1 or self.DatasetsConfigurations['proc_reduce_dimensionality'][0] != 'variance'):
-                Dataset['data'], RemovedFeatures, Dataset['headers'], _ = propheticus.core.DatasetReduction.dimensionalityReduction(self.getDatasetsIdentifiers(), self.getConfigurationsIdentifier(), propheticus.shared.Utils.toStringCurrentConfigurations(self.DatasetsConfigurations), self.DatasetsConfigurations['proc_reduce_dimensionality'], Dataset['data'], Dataset['targets'], Dataset['headers'], self.DatasetsConfigurations['proc_reduce_dimensionality_parameters'], seed=1234)
+                Dataset['data'], RemovedFeatures, Dataset['headers'], _ = propheticus.core.DatasetReduction.dimensionalityReduction(self.getDatasetsIdentifiers(), self.getConfigurationsIdentifier(),
+                                                                                                                                    propheticus.shared.Utils.toStringCurrentConfigurations(self.DatasetsConfigurations),
+                                                                                                                                    self.DatasetsConfigurations['proc_reduce_dimensionality'], Dataset['data'], Dataset['targets'], Dataset['headers'],
+                                                                                                                                    self.DatasetsConfigurations['proc_reduce_dimensionality_parameters'], seed=1234)
 
         self.loadDataCache(self.action_context, Dataset)
 
@@ -1390,19 +1711,9 @@ class GUI(object):
         self.InternalConfigurations['datasets_cache'] = {'action_context': action_context}
         self._DataCache = Dataset
 
-
-
-
-
-
-
-
-
-
-
     def printCurrentDatasetsHeaders(self):
         propheticus.shared.Utils.printStatusMessage('Current datasets headers:')
-        Headers = ['[' + str(index+1) + '] ' + header for index, header in enumerate(self.oDataManagement.datasets_headers)]
+        Headers = ['[' + str(index + 1) + '] ' + header for index, header in enumerate(self.oDataManagement.datasets_headers)]
 
         items_per_row = 10
         for i in range(int(len(Headers) / items_per_row + 1)):
@@ -1412,9 +1723,14 @@ class GUI(object):
         if self.hash_config_basename is True:
             basename = propheticus.shared.Utils.getConfigurationsIdentifier(self.DatasetsConfigurations)
         else:
+            propheticus.shared.Utils.printFatalMessage('This functionality is not currently maintained. Please contact the author if strictly necessary')
             DescriptiveFields = [
                 'config_binary_classification',
                 'config_grid_search',
+                'config_ensemble_algorithms',
+                'config_ensemble_algorithms_parameters',
+                'config_ensemble_selection',
+                'config_ensemble_selection_parameters',
                 'config_sliding_window',
                 # 'datasets',
                 'pre_target',
@@ -1433,7 +1749,7 @@ class GUI(object):
         return basename
 
     def getDatasetsIdentifiers(self):
-        identifier = self.DatasetsConfigurations['datasets_base_name'] if self.DatasetsConfigurations['datasets_base_name'] != '' else ''.join(self.DatasetsConfigurations['datasets'])
+        identifier = self.DatasetsConfigurations['datasets_base_name'] if self.DatasetsConfigurations['datasets_base_name'] != '' else ''.join(sorted(self.DatasetsConfigurations['datasets']))
         return propheticus.shared.Utils.getDatasetsIdentifiers(identifier)
 
     # TODO: create method to validate all configurations consistency
@@ -1450,6 +1766,10 @@ class GUI(object):
         if self.DatasetsConfigurations['proc_reduce_dimensionality'] is not False:
             RunDetailsData.append(['Dimensionality Reduced'])
 
+        RunDetailsData.append([])
+        RunDetailsData.append(['Custom Details'])
+        RunDetailsData.append(['Data Classes', str(self._DataCache["classes"])])
+
         ClassificationProcessData = []
 
         ClassificationProcessData.append(['Classification Algorithms'])
@@ -1460,7 +1780,7 @@ class GUI(object):
             propheticus.shared.Utils.printStatusMessage('-- Algorithm: ' + algorithm)
             if isinstance(Results, list):
                 for index, Result in enumerate(Results):
-                    label = algorithm + ' - ' + (f'seed {index+1}' if index + 1 != len(Results) else 'Final ')
+                    label = algorithm + ' - ' + (f'seed {index + 1}' if index + 1 != len(Results) else 'Final ')
                     ParsedResults = [label] + self._processResults(Result, Config.ClassificationReportHeaders)
                     ClassificationProcessData.append(ParsedResults)
 
@@ -1480,7 +1800,7 @@ class GUI(object):
                 ClusteringProcessData.append(ParsedResults)
 
                 ClusteringProcessData.append([])
-        
+
         propheticus.shared.Utils.saveExcel(os.path.join(Config.framework_instance_generated_logs_path, self.getDatasetsIdentifiers()), self.getConfigurationsIdentifier() + '.Log.xlsx', RunDetailsData, ClassificationProcessData, ClusteringProcessData)
 
     def _processResults(self, OriginalResult, ReportHeaders):
@@ -1489,11 +1809,11 @@ class GUI(object):
         metrics_count = len(ReportHeadersLabels)
         Result = copy.deepcopy(OriginalResult)
 
-        if len(OriginalResult) != metrics_count:
-            MissingKeys = list(set(Config.ClassificationReportHeaders.keys()) - set(OriginalResult.keys()))
-            propheticus.shared.Utils.printFatalMessage(f'Not all results have the same structure! Missing keys: ' + ', '.join(MissingKeys))
+        # if len(OriginalResult) != metrics_count:
+        #     MissingKeys = list(set(Config.ClassificationReportHeaders.keys()) - set(OriginalResult.keys()))
+        #     propheticus.shared.Utils.printWarningMessage(f'Not all results have the same structure! Missing keys: ' + ', '.join(MissingKeys))
 
-        ParsedResults = [propheticus.shared.Utils.escapeExcelValues(Result.pop(key)) for key in ReportHeadersIndexes if key in Result]
+        ParsedResults = [propheticus.shared.Utils.escapeExcelValues(Result.pop(key)) if key in Result else '' for key in ReportHeadersIndexes]
         if len(Result) > 0:
             propheticus.shared.Utils.printFatalMessage(f'Not all results have the same structure! Remaining keys: ' + ', '.join(Result.keys()))
 
@@ -1517,9 +1837,6 @@ class GUI(object):
         if not isinstance(self.DatasetsConfigurations['config_binary_classification'], bool):
             propheticus.shared.Utils.printErrorMessage('Configuration binary classification must be a boolean value! Current value: ' + str(self.DatasetsConfigurations['config_binary_classification']))
 
-        if self.DatasetsConfigurations['config_cv_fold'] < 1:
-            propheticus.shared.Utils.printErrorMessage('Configuration cv fold must be >= 1! Current value: ' + str(self.DatasetsConfigurations['config_cv_fold']))
-
         if self.DatasetsConfigurations['config_seed_count'] < 1:
             propheticus.shared.Utils.printErrorMessage('Configuration seed count must be >= 1! Current value: ' + str(self.DatasetsConfigurations['config_seed_count']))
 
@@ -1535,7 +1852,7 @@ class GUI(object):
 
         for key, Data in ValidateStaticKeys.items():
             if not set(self.DatasetsConfigurations[key]).issubset(Data):
-                propheticus.shared.Utils.printErrorMessage('Invalid configuration values for key ' + key)
+                propheticus.shared.Utils.printErrorMessage(f'Invalid configuration values for key {key} ({self.DatasetsConfigurations[key]})')
                 return False
 
         # TODO: improve these validations
@@ -1545,7 +1862,7 @@ class GUI(object):
                 return False
 
             if self.DatasetsConfigurations['pre_target'] not in self.oDataManagement.datasets_headers:
-                propheticus.shared.Utils.printErrorMessage('Chosen label feature does not exist in the datasets chosen')
+                propheticus.shared.Utils.printErrorMessage(f'Chosen label {self.DatasetsConfigurations["pre_target"]} feature does not exist in the datasets chosen')
                 return False
 
         return True
@@ -1554,5 +1871,3 @@ class GUI(object):
         self.Help['mainMenu'] = '''The most recent documentation for Propheticus can be found at https://jrcampos.github.io/propheticus/
         \n\nMay the odds be ever in your favor - Suzanne Collins
         '''
-
-

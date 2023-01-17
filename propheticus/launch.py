@@ -4,8 +4,11 @@ import sys
 import importlib
 import importlib.util
 import shutil
+import sys
 
 def launch():
+    print(f'Python {sys.version}')
+
     min_major_version = 3
     min_minor_version = 6
     if sys.version_info[0] < min_major_version or sys.version_info[1] < min_minor_version:
@@ -21,7 +24,17 @@ def launch():
         'imblearn',
         'statsmodels',
         'pyclustering',
-        'seaborn'
+        'seaborn',
+        'joblib',
+        'pandas',
+        'graphviz',
+        'tensorflow',
+        'matplotlib_venn',
+        'pydotplus',
+        'pexpect',
+        'xgboost',
+        'keras',
+        'art'  # NOTE: adversarial-robustness-toolbox
     ]
 
     MissingModules = [required_module for required_module in RequiredPackages if not importlib.util.find_spec(required_module)]
@@ -31,8 +44,8 @@ def launch():
     Configs = {'framework_instance': None}
 
     import propheticus
-    if os.path.exists(propheticus.Config.framework_temp_path):
-        shutil.rmtree(propheticus.Config.framework_temp_path)
+    # if os.path.exists(propheticus.Config.framework_temp_path):
+    #     shutil.rmtree(propheticus.Config.framework_temp_path)
 
     Instances = next(os.walk(propheticus.Config.framework_instances_path))[1]
     if len(Instances) > 1:

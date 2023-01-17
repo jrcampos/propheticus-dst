@@ -2,6 +2,7 @@
 Wrapper class to extend the PyClustering class to the scikit interface
 """
 import pyclustering.cluster
+import pyclustering.cluster.cure
 import numpy
 from sklearn.base import BaseEstimator, ClusterMixin
 
@@ -21,9 +22,8 @@ class py_clustering(BaseEstimator, ClusterMixin):
 
         Data = [None] * len(X)
         for index, Cluster in enumerate(DataByClusters):
-            for Item in Cluster:
-                temp = _X.index(Item)
-                Data[_X.index(Item)] = index
+            for item_index in Cluster:
+                Data[item_index] = index
 
         self.labels_ = numpy.array(Data)
 
